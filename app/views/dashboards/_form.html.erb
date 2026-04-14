@@ -1,0 +1,31 @@
+<%= form_with model: dashboard, class: "max-w-xl" do |f| %>
+  <% if dashboard.errors.any? %>
+    <div class="bg-red-950/50 border border-red-800/50 rounded-xl px-5 py-4 mb-6">
+      <p class="text-sm text-red-400"><%= dashboard.errors.full_messages.join(", ") %></p>
+    </div>
+  <% end %>
+
+  <div class="bg-surface-raised border border-border rounded-xl p-5 space-y-4">
+    <div>
+      <label class="block text-xs text-gray-500 mb-1.5">Name</label>
+      <%= f.text_field :name, autofocus: true, placeholder: "e.g. Token Usage Overview",
+          class: "w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-accent" %>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-500 mb-1.5">Description <span class="text-gray-600">(optional)</span></label>
+      <%= f.text_area :description, rows: 2, placeholder: "What does this dashboard track?",
+          class: "w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-accent resize-y" %>
+    </div>
+
+    <div class="flex items-center gap-3 pt-2">
+      <%= f.submit dashboard.persisted? ? "Update Dashboard" : "Create Dashboard",
+          class: "bg-accent hover:bg-accent-dim text-white text-sm font-medium px-5 py-2 rounded-lg transition cursor-pointer" %>
+      <% if dashboard.persisted? %>
+        <%= link_to "Cancel", dashboard_path(dashboard), class: "text-sm text-gray-500 hover:text-gray-300 transition" %>
+      <% else %>
+        <%= link_to "Cancel", dashboards_path, class: "text-sm text-gray-500 hover:text-gray-300 transition" %>
+      <% end %>
+    </div>
+  </div>
+<% end %>

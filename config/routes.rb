@@ -5,5 +5,9 @@ Rails.application.routes.draw do
   resources :queries, only: [ :index ]
   resources :sql_console, only: [ :index ]
 
+  resources :dashboards do
+    resources :panels, only: [ :new, :create, :edit, :update, :destroy ]
+  end
+
   get "up" => "rails/health#show", as: :rails_health_check
 end

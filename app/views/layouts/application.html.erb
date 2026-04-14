@@ -6,6 +6,7 @@
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -47,6 +48,7 @@
                 <%= link_to "Sessions", sessions_path, class: "px-3 py-1.5 rounded-md text-sm #{request.path.start_with?('/sessions') ? 'bg-surface text-white' : 'text-gray-400 hover:text-white hover:bg-surface-hover'} transition" %>
                 <%= link_to "Query", queries_path, class: "px-3 py-1.5 rounded-md text-sm #{request.path.start_with?('/queries') ? 'bg-surface text-white' : 'text-gray-400 hover:text-white hover:bg-surface-hover'} transition" %>
                 <%= link_to "SQL Console", sql_console_index_path, class: "px-3 py-1.5 rounded-md text-sm #{request.path.start_with?('/sql_console') ? 'bg-surface text-white' : 'text-gray-400 hover:text-white hover:bg-surface-hover'} transition" %>
+                <%= link_to "Charts", dashboards_path, class: "px-3 py-1.5 rounded-md text-sm #{request.path.start_with?('/dashboards') ? 'bg-surface text-white' : 'text-gray-400 hover:text-white hover:bg-surface-hover'} transition" %>
               </div>
             </div>
             <div class="text-xs text-gray-500">

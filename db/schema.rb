@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_14_000010) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_14_000011) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -51,6 +51,28 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_14_000010) do
     t.index ["assistant_message_uuid"], name: "index_content_blocks_on_assistant_message_uuid"
     t.index ["block_type"], name: "index_content_blocks_on_block_type"
     t.index ["tool_name"], name: "index_content_blocks_on_tool_name"
+  end
+
+  create_table "dashboard_panels", force: :cascade do |t|
+    t.string "chart_type", default: "bar", null: false
+    t.jsonb "config", default: {}
+    t.datetime "created_at", null: false
+    t.bigint "dashboard_id", null: false
+    t.integer "position", default: 0, null: false
+    t.string "series_column"
+    t.text "sql_query", null: false
+    t.string "title", null: false
+    t.datetime "updated_at", null: false
+    t.string "value_column"
+    t.string "x_column"
+    t.index ["dashboard_id"], name: "index_dashboard_panels_on_dashboard_id"
+  end
+
+  create_table "dashboards", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.text "description"
+    t.string "name", null: false
+    t.datetime "updated_at", null: false
   end
 
   create_table "file_history_snapshots", force: :cascade do |t|
@@ -139,6 +161,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_14_000010) do
   add_foreign_key "assistant_messages", "messages", column: "message_uuid", primary_key: "uuid"
   add_foreign_key "attachments", "messages", column: "message_uuid", primary_key: "uuid"
   add_foreign_key "content_blocks", "assistant_messages", column: "assistant_message_uuid", primary_key: "message_uuid"
+  add_foreign_key "dashboard_panels", "dashboards"
   add_foreign_key "file_history_snapshots", "sessions", primary_key: "session_id"
   add_foreign_key "messages", "sessions", primary_key: "session_id"
   add_foreign_key "pr_links", "sessions", primary_key: "session_id"

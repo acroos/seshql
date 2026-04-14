@@ -1,0 +1,87 @@
+<% content_for(:title) { "SeshQL — #{@dashboard.name}" } %>
+
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <div class="flex items-center gap-3 mb-1">
+      <%= link_to "Dashboards", dashboards_path, class: "text-sm text-gray-500 hover:text-gray-300 transition" %>
+      <span class="text-gray-600">/</span>
+      <h1 class="text-lg font-semibold text-white"><%= @dashboard.name %></h1>
+    </div>
+    <% if @dashboard.description.present? %>
+      <p class="text-sm text-gray-500"><%= @dashboard.description %></p>
+    <% end %>
+  </div>
+  <div class="flex items-center gap-2">
+    <%= link_to new_dashboard_panel_path(@dashboard), class: "bg-accent hover:bg-accent-dim text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2" do %>
+      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+      </svg>
+      Add Panel
+    <% end %>
+    <%= link_to edit_dashboard_path(@dashboard), class: "text-sm text-gray-500 hover:text-gray-300 transition px-3 py-2 rounded-lg border border-border hover:border-border-light" do %>
+      Edit
+    <% end %>
+    <%= link_to dashboard_path(@dashboard), method: :delete, data: { turbo_method: :delete, turbo_confirm: "Delete this dashboard?" }, class: "text-sm text-red-400/60 hover:text-red-400 transition px-3 py-2 rounded-lg border border-border hover:border-red-800/50" do %>
+      Delete
+    <% end %>
+  </div>
+</div>
+
+<% if @panels_data.empty? %>
+  <div class="bg-surface-raised border border-border rounded-xl p-12 text-center">
+    <svg class="w-10 h-10 text-gray-600 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke-width="1" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+    </svg>
+    <p class="text-gray-400 mb-2">No panels yet</p>
+    <p class="text-sm text-gray-600 mb-4">Add a panel with a SQL query to start visualizing data.</p>
+    <%= link_to "Add Panel", new_dashboard_panel_path(@dashboard), class: "inline-block bg-accent hover:bg-accent-dim text-white text-sm font-medium px-4 py-2 rounded-lg transition" %>
+  </div>
+<% else %>
+  <div class="space-y-6">
+    <% @panels_data.each do |pd| %>
+      <div class="bg-surface-raised border border-border rounded-xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <h2 class="text-sm font-medium text-gray-300"><%= pd[:panel].title %></h2>
+            <span class="text-xs text-gray-600 font-mono px-1.5 py-0.5 bg-surface rounded"><%= pd[:panel].chart_type.humanize %></span>
+          </div>
+          <div class="flex items-center gap-2">
+            <%= link_to edit_dashboard_panel_path(@dashboard, pd[:panel]), class: "text-xs text-gray-500 hover:text-gray-300 transition" do %>
+              Edit
+            <% end %>
+            <%= link_to dashboard_panel_path(@dashboard, pd[:panel]), method: :delete, data: { turbo_method: :delete, turbo_confirm: "Remove this panel?" }, class: "text-xs text-red-400/60 hover:text-red-400 transition" do %>
+              Remove
+            <% end %>
+          </div>
+        </div>
+
+        <div class="p-5">
+          <% if pd[:error] %>
+            <div class="bg-red-950/50 border border-red-800/50 rounded-lg px-4 py-3">
+              <p class="text-sm text-red-400 font-mono"><%= pd[:error] %></p>
+            </div>
+          <% elsif pd[:chart_data] %>
+            <div class="h-80"
+                 data-controller="chart"
+                 data-chart-type-value="<%= pd[:panel].chart_type %>"
+                 data-chart-data-value="<%= pd[:chart_data].to_json %>">
+              <canvas data-chart-target="canvas"></canvas>
+            </div>
+          <% else %>
+            <p class="text-sm text-gray-600 text-center py-8">No data returned.</p>
+          <% end %>
+        </div>
+
+        <!-- Collapsible SQL -->
+        <details class="border-t border-border">
+          <summary class="px-5 py-2.5 text-xs text-gray-600 hover:text-gray-400 cursor-pointer transition">
+            Show SQL
+          </summary>
+          <div class="px-5 pb-4">
+            <pre class="text-xs text-gray-500 font-mono whitespace-pre-wrap leading-relaxed"><%= pd[:panel].sql_query %></pre>
+          </div>
+        </details>
+      </div>
+    <% end %>
+  </div>
+<% end %>
