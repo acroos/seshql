@@ -64,7 +64,8 @@
             <div class="h-80"
                  data-controller="chart"
                  data-chart-type-value="<%= pd[:panel].chart_type %>"
-                 data-chart-data-value="<%= pd[:chart_data].to_json %>">
+                 data-chart-data-value="<%= pd[:chart_data].to_json %>"
+                 data-chart-config-value="<%= (pd[:panel].config || {}).to_json %>">
               <canvas data-chart-target="canvas"></canvas>
             </div>
           <% else %>

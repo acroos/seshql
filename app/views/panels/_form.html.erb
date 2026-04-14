@@ -56,6 +56,36 @@
                 class: "w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 font-mono placeholder-gray-600 focus:outline-none focus:border-accent" %>
           </div>
         </div>
+
+        <div class="mt-4 pt-4 border-t border-border">
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Dual Y-Axis <span class="text-gray-600 normal-case">(optional)</span></h4>
+          <p class="text-xs text-gray-600 mb-3">
+            Place specific dataset columns on a secondary right-side axis when values are on very different scales.
+          </p>
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">Secondary Y Datasets <span class="text-gray-600">(comma-separated column names)</span></label>
+              <input type="text" name="dashboard_panel[config_secondary_y_datasets]"
+                     value="<%= (panel.config&.dig('secondary_y_datasets') || []).join(', ') %>"
+                     placeholder="e.g. read_count, calls"
+                     class="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 font-mono placeholder-gray-600 focus:outline-none focus:border-accent">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">Left Y Label</label>
+              <input type="text" name="dashboard_panel[config_y_axis_label]"
+                     value="<%= panel.config&.dig('y_axis_label') %>"
+                     placeholder="e.g. Tokens"
+                     class="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 font-mono placeholder-gray-600 focus:outline-none focus:border-accent">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">Right Y Label</label>
+              <input type="text" name="dashboard_panel[config_y1_axis_label]"
+                     value="<%= panel.config&.dig('y1_axis_label') %>"
+                     placeholder="e.g. Count"
+                     class="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 font-mono placeholder-gray-600 focus:outline-none focus:border-accent">
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="flex items-center gap-3">

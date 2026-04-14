@@ -54,6 +54,17 @@ class PanelsController < ApplicationController
   end
 
   def panel_params
-    params.require(:dashboard_panel).permit(:title, :sql_query, :chart_type, :x_column, :series_column, :value_column)
+    permitted = params.require(:dashboard_panel).permit(:title, :sql_query, :chart_type, :x_column, :series_column, :value_column,
+      :config_secondary_y_datasets, :config_y_axis_label, :config_y1_axis_label)
+
+    # Build config JSONB from the config_ prefixed params
+    config = {}
+    if permitted[:config_secondary_y_datasets].present?
+      config["secondary_y_datasets"] = permitted[:config_secondary_y_datasets].split(",").map(&:strip).reject(&:blank?)
+    end
+    config["y_axis_label"] = permitted[:config_y_axis_label] if permitted[:config_y_axis_label].present?
+    config["y1_axis_label"] = permitted[:config_y1_axis_label] if permitted[:config_y1_axis_label].present?
+
+    permitted.except(:config_secondary_y_datasets, :config_y_axis_label, :config_y1_axis_label).merge(config: config)
   end
 end

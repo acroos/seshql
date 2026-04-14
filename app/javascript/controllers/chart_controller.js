@@ -5,7 +5,8 @@ export default class extends Controller {
   static targets = ["canvas"]
   static values = {
     type: { type: String, default: "bar" },
-    data: String
+    data: String,
+    config: { type: String, default: "{}" }
   }
 
   connect() {
@@ -33,9 +34,14 @@ export default class extends Controller {
     const data = JSON.parse(this.dataValue)
     if (!data || !data.labels || !data.datasets) return
 
+    const config = JSON.parse(this.configValue)
     const ctx = this.canvasTarget.getContext("2d")
     const chartType = this.typeValue === "stacked_bar" ? "bar" : this.typeValue
     const stacked = this.typeValue === "stacked_bar"
+
+    // Determine which datasets go on secondary y-axis
+    const secondaryLabels = config.secondary_y_datasets || []
+    const hasSecondaryAxis = secondaryLabels.length > 0
 
     const colors = [
       "rgba(99, 102, 241, 0.8)",   // indigo (accent)
@@ -52,17 +58,80 @@ export default class extends Controller {
 
     const borderColors = colors.map(c => c.replace("0.8)", "1)"))
 
-    const datasets = data.datasets.map((ds, i) => ({
-      label: ds.label,
-      data: ds.data,
-      backgroundColor: colors[i % colors.length],
-      borderColor: borderColors[i % borderColors.length],
-      borderWidth: chartType === "line" ? 2 : 1,
-      fill: false,
-      tension: 0.3,
-      pointRadius: chartType === "line" ? 3 : undefined,
-      pointHoverRadius: chartType === "line" ? 5 : undefined,
-    }))
+    const datasets = data.datasets.map((ds, i) => {
+      const isSecondary = secondaryLabels.includes(ds.label)
+      return {
+        label: ds.label,
+        data: ds.data,
+        backgroundColor: colors[i % colors.length],
+        borderColor: borderColors[i % borderColors.length],
+        borderWidth: chartType === "line" ? 2 : 1,
+        fill: false,
+        tension: 0.3,
+        pointRadius: chartType === "line" ? 3 : undefined,
+        pointHoverRadius: chartType === "line" ? 5 : undefined,
+        ...(hasSecondaryAxis ? { yAxisID: isSecondary ? "y1" : "y" } : {})
+      }
+    })
+
+    const formatTick = function(value) {
+      if (value >= 1_000_000) return (value / 1_000_000).toFixed(1) + "M"
+      if (value >= 1_000) return (value / 1_000).toFixed(0) + "K"
+      return value
+    }
+
+    const scales = {
+      x: {
+        stacked: stacked,
+        ticks: {
+          color: "#6b7280",
+          font: { size: 10 },
+          maxRotation: 45,
+          autoSkip: true,
+          maxTicksLimit: 30
+        },
+        grid: { color: "rgba(42, 46, 61, 0.5)" },
+        border: { color: "#2a2e3d" }
+      },
+      y: {
+        stacked: stacked,
+        beginAtZero: true,
+        position: "left",
+        title: hasSecondaryAxis ? {
+          display: true,
+          text: config.y_axis_label || "",
+          color: "#6b7280",
+          font: { size: 11 }
+        } : undefined,
+        ticks: {
+          color: "#6b7280",
+          font: { size: 10 },
+          callback: formatTick
+        },
+        grid: { color: "rgba(42, 46, 61, 0.5)" },
+        border: { color: "#2a2e3d" }
+      }
+    }
+
+    if (hasSecondaryAxis) {
+      scales.y1 = {
+        beginAtZero: true,
+        position: "right",
+        title: {
+          display: true,
+          text: config.y1_axis_label || "",
+          color: "#6b7280",
+          font: { size: 11 }
+        },
+        ticks: {
+          color: "#6b7280",
+          font: { size: 10 },
+          callback: formatTick
+        },
+        grid: { drawOnChartArea: false },
+        border: { color: "#2a2e3d" }
+      }
+    }
 
     this.chart = new Chart(ctx, {
       type: chartType,
@@ -110,35 +179,7 @@ export default class extends Controller {
             }
           }
         },
-        scales: {
-          x: {
-            stacked: stacked,
-            ticks: {
-              color: "#6b7280",
-              font: { size: 10 },
-              maxRotation: 45,
-              autoSkip: true,
-              maxTicksLimit: 30
-            },
-            grid: { color: "rgba(42, 46, 61, 0.5)" },
-            border: { color: "#2a2e3d" }
-          },
-          y: {
-            stacked: stacked,
-            beginAtZero: true,
-            ticks: {
-              color: "#6b7280",
-              font: { size: 10 },
-              callback: function(value) {
-                if (value >= 1_000_000) return (value / 1_000_000).toFixed(1) + "M"
-                if (value >= 1_000) return (value / 1_000).toFixed(0) + "K"
-                return value
-              }
-            },
-            grid: { color: "rgba(42, 46, 61, 0.5)" },
-            border: { color: "#2a2e3d" }
-          }
-        }
+        scales: scales
       }
     })
   }
