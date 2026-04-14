@@ -56,6 +56,47 @@ namespace :sessions do
     puts "Done. Re-ingesting..."
     Rake::Task["sessions:ingest"].invoke
   end
+
+  desc "Backfill PR titles from GitHub for PR links missing a title"
+  task backfill_pr_titles: :environment do
+    links = PrLink.where(pr_title: nil).where.not(pr_repository: nil, pr_number: nil)
+    puts "Found #{links.count} PR links without titles"
+
+    links.find_each do |pr|
+      title = fetch_pr_title(pr.pr_repository, pr.pr_number)
+      if title
+        pr.update!(pr_title: title)
+        puts "  #{pr.pr_repository}##{pr.pr_number} → #{title}"
+      else
+        puts "  #{pr.pr_repository}##{pr.pr_number} → (failed)"
+      end
+    end
+  end
+
+  desc "Backfill inferred titles for sessions missing one"
+  task backfill_titles: :environment do
+    sessions = Session.where(inferred_title: nil)
+    puts "Found #{sessions.count} sessions without inferred titles"
+
+    sessions.find_each do |session|
+      first_prompt = session.messages
+        .joins(:user_prompt)
+        .where(message_type: :user_prompt)
+        .where(user_prompts: { is_meta: false })
+        .order(:timestamp)
+        .first
+        &.user_prompt
+        &.content_text
+
+      next unless first_prompt.present?
+
+      title = generate_session_title(first_prompt)
+      if title
+        session.update!(inferred_title: title)
+        puts "  #{session.session_id[0..11]}… → #{title}"
+      end
+    end
+  end
 end
 
 def ingest_session(file_path, session_id, project_path)
@@ -67,6 +108,8 @@ def ingest_session(file_path, session_id, project_path)
       session_id: session_id,
       project_path: project_path
     )
+
+    first_prompt_text = nil
 
     lines.each do |record|
       case record["type"]
@@ -86,11 +129,13 @@ def ingest_session(file_path, session_id, project_path)
         session.update!(worktree_config: record["worktreeSession"] || {})
 
       when "pr-link"
+        pr_title = fetch_pr_title(record["prRepository"], record["prNumber"])
         PrLink.create!(
           session_id: session_id,
           pr_number: record["prNumber"],
           pr_url: record["prUrl"],
           pr_repository: record["prRepository"],
+          pr_title: pr_title,
           linked_at: record["timestamp"]
         )
 
@@ -105,6 +150,10 @@ def ingest_session(file_path, session_id, project_path)
         )
 
       when "user"
+        # Capture first non-meta user prompt for title inference
+        if first_prompt_text.nil? && record.dig("message", "content").is_a?(String) && !record.dig("isMeta")
+          first_prompt_text = record.dig("message", "content")
+        end
         ingest_user_message(record, session)
 
       when "assistant"
@@ -116,6 +165,12 @@ def ingest_session(file_path, session_id, project_path)
       when "attachment"
         ingest_attachment_message(record, session)
       end
+    end
+
+    # Infer session title from first prompt via Haiku
+    if first_prompt_text.present?
+      inferred = generate_session_title(first_prompt_text)
+      session.update!(inferred_title: inferred) if inferred
     end
 
     # Set session created_at from earliest message timestamp
@@ -248,4 +303,35 @@ def derive_project_path(file_path, projects_dir)
   relative = file_path.sub("#{projects_dir}/", "")
   parts = relative.split("/")
   parts.first
+end
+
+# Fetch PR title from GitHub using gh CLI
+def fetch_pr_title(repository, pr_number)
+  return nil unless repository.present? && pr_number.present?
+
+  require "open3"
+  output, status = Open3.capture2("gh", "pr", "view", pr_number.to_s, "--repo", repository.to_s, "--json", "title", "-q", ".title")
+  return output.strip.presence if status.success?
+  nil
+rescue => e
+  $stderr.puts "Warning: Could not fetch PR title for #{repository}##{pr_number}: #{e.message}"
+  nil
+end
+
+# Generate a concise session title from the first user prompt using Claude Haiku
+def generate_session_title(prompt_text)
+  require "open3"
+  truncated = prompt_text[0..1000]
+  prompt = "Generate a concise 5-10 word title summarizing what this coding session is about. Output ONLY the title text, nothing else."
+
+  output, status = Open3.capture2("claude", "-p", "--model", "haiku", prompt, stdin_data: truncated)
+  return nil unless status.success?
+
+  title = output.strip.presence
+  # Sanity check: reject if too long
+  return nil if title.nil? || title.length > 120
+  title
+rescue => e
+  $stderr.puts "Warning: Could not generate session title: #{e.message}"
+  nil
 end

@@ -55,7 +55,8 @@
       <% end %>
       <div class="flex items-center gap-4 mt-2 text-[11px] text-gray-600">
         <% if session.pr_links.any? %>
-          <span class="text-green-400/70">PR #<%= session.pr_links.first.pr_number %></span>
+          <% pr = session.pr_links.first %>
+          <span class="text-green-400/70"><%= pr.display_name.truncate(50) %></span>
         <% end %>
         <span><%= session.session_id[0..7] %></span>
       </div>
