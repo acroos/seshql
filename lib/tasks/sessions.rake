@@ -1,0 +1,251 @@
+namespace :sessions do
+  desc "Ingest all Claude Code session JSONL files from ~/.claude/projects"
+  task ingest: :environment do
+    require "json"
+
+    projects_dir = File.expand_path("~/.claude/projects")
+    unless Dir.exist?(projects_dir)
+      puts "No projects directory found at #{projects_dir}"
+      exit 1
+    end
+
+    jsonl_files = Dir.glob(File.join(projects_dir, "**", "*.jsonl"))
+    puts "Found #{jsonl_files.size} JSONL files"
+
+    ingested = 0
+    skipped = 0
+    errored = 0
+
+    jsonl_files.each_with_index do |file_path, idx|
+      session_id = File.basename(file_path, ".jsonl")
+      project_path = derive_project_path(file_path, projects_dir)
+
+      if Session.exists?(session_id: session_id)
+        skipped += 1
+        next
+      end
+
+      begin
+        ingest_session(file_path, session_id, project_path)
+        ingested += 1
+        print "\r[#{idx + 1}/#{jsonl_files.size}] Ingested: #{ingested} | Skipped: #{skipped} | Errors: #{errored}"
+      rescue => e
+        errored += 1
+        $stderr.puts "\nError ingesting #{file_path}: #{e.message}"
+        $stderr.puts e.backtrace.first(3).join("\n")
+      end
+    end
+
+    puts "\nDone! Ingested: #{ingested} | Skipped: #{skipped} | Errors: #{errored}"
+  end
+
+  desc "Re-ingest all sessions (drops existing data first)"
+  task reingest: :environment do
+    puts "Clearing all session data..."
+    # Delete in dependency order
+    ContentBlock.delete_all
+    AssistantMessage.delete_all
+    UserPrompt.delete_all
+    ToolResult.delete_all
+    SystemEvent.delete_all
+    Attachment.delete_all
+    Message.delete_all
+    PrLink.delete_all
+    FileHistorySnapshot.delete_all
+    Session.delete_all
+    puts "Done. Re-ingesting..."
+    Rake::Task["sessions:ingest"].invoke
+  end
+end
+
+def ingest_session(file_path, session_id, project_path)
+  lines = File.readlines(file_path).map { |l| JSON.parse(l) }
+  return if lines.empty?
+
+  ActiveRecord::Base.transaction do
+    session = Session.create!(
+      session_id: session_id,
+      project_path: project_path
+    )
+
+    lines.each do |record|
+      case record["type"]
+      when "permission-mode"
+        session.update!(permission_mode: record["permissionMode"])
+
+      when "custom-title"
+        session.update!(custom_title: record["customTitle"])
+
+      when "agent-name"
+        session.update!(agent_name: record["agentName"])
+
+      when "last-prompt"
+        session.update!(last_prompt: record["lastPrompt"])
+
+      when "worktree-state"
+        session.update!(worktree_config: record["worktreeSession"] || {})
+
+      when "pr-link"
+        PrLink.create!(
+          session_id: session_id,
+          pr_number: record["prNumber"],
+          pr_url: record["prUrl"],
+          pr_repository: record["prRepository"],
+          linked_at: record["timestamp"]
+        )
+
+      when "file-history-snapshot"
+        snapshot = record["snapshot"] || {}
+        FileHistorySnapshot.create!(
+          session_id: session_id,
+          source_message_id: record["messageId"],
+          is_snapshot_update: record["isSnapshotUpdate"] || false,
+          tracked_files: snapshot["trackedFileBackups"] || {},
+          snapshot_timestamp: snapshot["timestamp"]
+        )
+
+      when "user"
+        ingest_user_message(record, session)
+
+      when "assistant"
+        ingest_assistant_message(record, session)
+
+      when "system"
+        ingest_system_message(record, session)
+
+      when "attachment"
+        ingest_attachment_message(record, session)
+      end
+    end
+
+    # Set session created_at from earliest message timestamp
+    earliest = session.messages.minimum(:timestamp)
+    session.update!(created_at: earliest) if earliest
+  end
+end
+
+def ingest_user_message(record, session)
+  msg_content = record.dig("message", "content")
+  uuid = record["uuid"]
+  return unless uuid
+
+  if msg_content.is_a?(String)
+    # Actual human prompt
+    message = create_message(record, session, :user_prompt)
+    UserPrompt.find_or_create_by!(message_uuid: message.uuid) do |up|
+      up.content_text = msg_content
+      up.prompt_id = record["promptId"]
+      up.permission_mode = record["permissionMode"]
+      up.is_meta = record.dig("isMeta") || false
+    end
+  elsif msg_content.is_a?(Array)
+    # Tool result
+    message = create_message(record, session, :tool_result)
+    first_result = msg_content.first || {}
+    ToolResult.find_or_create_by!(message_uuid: message.uuid) do |tr|
+      tr.tool_use_id = first_result["tool_use_id"]
+      tr.source_assistant_uuid = record["sourceToolAssistantUUID"]
+      tr.result_type = first_result["type"]
+      tr.result_content = first_result["content"].is_a?(String) ? { text: first_result["content"] } : (first_result["content"] || {})
+    end
+  end
+end
+
+def ingest_assistant_message(record, session)
+  uuid = record["uuid"]
+  return unless uuid
+
+  msg = record["message"] || {}
+  usage = msg["usage"] || {}
+
+  message = create_message(record, session, :assistant)
+  assistant = AssistantMessage.find_or_create_by!(message_uuid: message.uuid) do |am|
+    am.model = msg["model"]
+    am.api_message_id = msg["id"]
+    am.request_id = record["requestId"]
+    am.stop_reason = msg["stop_reason"]
+    am.input_tokens = usage["input_tokens"] || 0
+    am.output_tokens = usage["output_tokens"] || 0
+    am.cache_creation_input_tokens = usage["cache_creation_input_tokens"] || 0
+    am.cache_read_input_tokens = usage["cache_read_input_tokens"] || 0
+    am.usage_details = usage.except("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+  end
+
+  # Content blocks (only if we just created the assistant message)
+  return if assistant.content_blocks.any?
+
+  (msg["content"] || []).each_with_index do |block, position|
+    next unless %w[thinking text tool_use].include?(block["type"])
+
+    ContentBlock.create!(
+      assistant_message_uuid: assistant.message_uuid,
+      position: position,
+      block_type: block["type"],
+      text_content: block["text"] || block["thinking"],
+      tool_use_id: block["id"],
+      tool_name: block["name"],
+      tool_input: block["input"] || {},
+      thinking_signature: block["signature"]
+    )
+  end
+end
+
+def ingest_system_message(record, session)
+  uuid = record["uuid"]
+  return unless uuid
+
+  message = create_message(record, session, :system)
+  SystemEvent.find_or_create_by!(message_uuid: message.uuid) do |se|
+    se.subtype = record["subtype"] || "unknown"
+    se.duration_ms = record["durationMs"]
+    se.message_count = record["messageCount"]
+    se.hook_count = record["hookCount"]
+    se.hook_infos = record["hookInfos"] || []
+    se.hook_errors = record["hookErrors"] || []
+    se.prevented_continuation = record["preventedContinuation"] || false
+    se.stop_reason = record["stopReason"]
+    se.has_output = record["hasOutput"] || false
+    se.level = record["level"]
+    se.is_meta = record["isMeta"] || false
+  end
+end
+
+def ingest_attachment_message(record, session)
+  uuid = record["uuid"]
+  return unless uuid
+
+  message = create_message(record, session, :attachment)
+  Attachment.find_or_create_by!(message_uuid: message.uuid) do |att|
+    att.attachment_type = record.dig("attachment", "type")
+    att.attachment_data = record["attachment"] || {}
+  end
+end
+
+def create_message(record, session, type)
+  existing = Message.find_by(uuid: record["uuid"])
+  return existing if existing
+
+  Message.create!(
+    uuid: record["uuid"],
+    session_id: session.session_id,
+    parent_uuid: record["parentUuid"],
+    message_type: type,
+    is_sidechain: record["isSidechain"] || false,
+    timestamp: record["timestamp"],
+    cwd: record["cwd"],
+    git_branch: record["gitBranch"],
+    version: record["version"],
+    entrypoint: record["entrypoint"],
+    slug: record["slug"],
+    user_type: record["userType"]
+  )
+end
+
+# Derive the project path from the file path.
+# Regular: projects/<project>/<session>.jsonl -> <project>
+# Subagent: projects/<project>/<session>/subagents/<agent>.jsonl -> <project>
+def derive_project_path(file_path, projects_dir)
+  relative = file_path.sub("#{projects_dir}/", "")
+  parts = relative.split("/")
+  parts.first
+end

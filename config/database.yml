@@ -1,0 +1,33 @@
+default: &default
+  adapter: postgresql
+  encoding: unicode
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
+  host: <%= ENV.fetch("DATABASE_HOST") { "localhost" } %>
+  port: <%= ENV.fetch("DATABASE_PORT") { 5433 } %>
+  username: <%= ENV.fetch("DATABASE_USERNAME") { "seshql" } %>
+  password: <%= ENV.fetch("DATABASE_PASSWORD") { "seshql" } %>
+
+development:
+  <<: *default
+  database: seshql_development
+
+test:
+  <<: *default
+  database: seshql_test
+
+production:
+  primary:
+    <<: *default
+    database: seshql_production
+  cache:
+    <<: *default
+    database: seshql_production_cache
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *default
+    database: seshql_production_queue
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *default
+    database: seshql_production_cable
+    migrations_paths: db/cable_migrate

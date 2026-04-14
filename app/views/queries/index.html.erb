@@ -1,0 +1,238 @@
+<% content_for(:title) { "SeshQL — Query Builder" } %>
+
+<div class="mb-6">
+  <h1 class="text-lg font-semibold text-white mb-1">Query Builder</h1>
+  <p class="text-sm text-gray-500">Select metrics, dimensions, and filters to explore your session data.</p>
+</div>
+
+<%= form_tag queries_path, method: :get, id: "query-form" do %>
+  <div class="grid lg:grid-cols-3 gap-4 mb-6">
+
+    <!-- Metrics -->
+    <div class="bg-surface-raised border border-border rounded-xl p-4">
+      <h2 class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Metrics (what to measure)</h2>
+      <div class="space-y-1.5 max-h-72 overflow-y-auto scrollbar-thin">
+        <% @metrics.each do |key, config| %>
+          <label class="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-surface-hover cursor-pointer transition">
+            <%= check_box_tag "metrics[]", key, Array(params[:metrics]).include?(key),
+                class: "rounded border-border bg-surface text-accent focus:ring-accent" %>
+            <span class="text-sm text-gray-300"><%= config[:label] %></span>
+          </label>
+        <% end %>
+      </div>
+    </div>
+
+    <!-- Dimensions -->
+    <div class="bg-surface-raised border border-border rounded-xl p-4">
+      <h2 class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Group By (dimensions)</h2>
+      <div class="space-y-1.5 max-h-72 overflow-y-auto scrollbar-thin">
+        <% @dimensions.each do |key, config| %>
+          <label class="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-surface-hover cursor-pointer transition">
+            <%= check_box_tag "dimensions[]", key, Array(params[:dimensions]).include?(key),
+                class: "rounded border-border bg-surface text-accent focus:ring-accent" %>
+            <span class="text-sm text-gray-300"><%= config[:label] %></span>
+          </label>
+        <% end %>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-surface-raised border border-border rounded-xl p-4">
+      <h2 class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Filters</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Project</label>
+          <select name="filters[project]" class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-accent">
+            <option value="">All projects</option>
+            <% @projects.each do |p| %>
+              <option value="<%= p %>" <%= 'selected' if params.dig(:filters, :project) == p %>><%= short_project(p) %></option>
+            <% end %>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">From</label>
+            <input type="date" name="filters[date_from]" value="<%= params.dig(:filters, :date_from) %>"
+                   class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-accent">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">To</label>
+            <input type="date" name="filters[date_to]" value="<%= params.dig(:filters, :date_to) %>"
+                   class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-accent">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Model</label>
+          <select name="filters[model]" class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-accent">
+            <option value="">All models</option>
+            <% @models.each do |m| %>
+              <option value="<%= m %>" <%= 'selected' if params.dig(:filters, :model) == m %>><%= m %></option>
+            <% end %>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Tool</label>
+          <select name="filters[tool_name]" class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-accent">
+            <option value="">All tools</option>
+            <% @tools.each do |t| %>
+              <option value="<%= t %>" <%= 'selected' if params.dig(:filters, :tool_name) == t %>><%= t %></option>
+            <% end %>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Text Search</label>
+          <input type="text" name="filters[search]" value="<%= params.dig(:filters, :search) %>" placeholder="Search prompts & titles..."
+                 class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-accent">
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Sort direction</label>
+            <select name="sort_dir" class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-accent">
+              <option value="desc" <%= 'selected' if params[:sort_dir] != 'asc' %>>Descending</option>
+              <option value="asc" <%= 'selected' if params[:sort_dir] == 'asc' %>>Ascending</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Limit</label>
+            <input type="number" name="limit" value="<%= params[:limit] || 50 %>" min="1" max="500"
+                   class="w-full bg-surface border border-border rounded-lg px-2.5 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-accent">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3 mb-6">
+    <button type="submit" class="bg-accent hover:bg-accent-dim text-white text-sm font-medium px-5 py-2 rounded-lg transition">
+      Run Query
+    </button>
+    <%= link_to "Reset", queries_path, class: "text-sm text-gray-500 hover:text-gray-300 transition" %>
+  </div>
+<% end %>
+
+<!-- Results -->
+<% if @results %>
+  <div class="bg-surface-raised border border-border rounded-xl overflow-hidden">
+    <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+      <h2 class="text-sm font-medium text-gray-400">
+        Results
+        <span class="text-gray-600 ml-1">(<%= @results.rows.size %> rows)</span>
+      </h2>
+      <button onclick="copyTable()" class="text-xs text-gray-500 hover:text-gray-300 transition px-2 py-1 rounded border border-border hover:border-border-light">
+        Copy as TSV
+      </button>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full" id="results-table">
+        <thead>
+          <tr class="border-b border-border">
+            <% @column_headers.each_with_index do |col, i| %>
+              <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide whitespace-nowrap">
+                <%= form_tag queries_path, method: :get, style: "display:inline" do %>
+                  <% request.query_parameters.each do |k, v|
+                    next if k == "sort_by"
+                    if v.is_a?(Array)
+                      v.each do |item| %>
+                        <input type="hidden" name="<%= k %>[]" value="<%= item %>">
+                      <% end
+                    elsif v.respond_to?(:each_pair)
+                      v.each do |sk, sv| %>
+                        <input type="hidden" name="<%= k %>[<%= sk %>]" value="<%= sv %>">
+                      <% end
+                    else %>
+                      <input type="hidden" name="<%= k %>" value="<%= v %>">
+                    <% end
+                  end %>
+                  <input type="hidden" name="sort_by" value="<%= i %>">
+                  <button type="submit" class="hover:text-white transition">
+                    <%= col[:label] %>
+                    <% if params[:sort_by].to_i == i %>
+                      <span class="text-accent"><%= params[:sort_dir] == 'asc' ? '↑' : '↓' %></span>
+                    <% end %>
+                  </button>
+                <% end %>
+              </th>
+            <% end %>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border/50">
+          <% @results.rows.each do |row| %>
+            <tr class="hover:bg-surface-hover transition">
+              <% row.each_with_index do |cell, i| %>
+                <% is_metric = i >= @selected_dimensions.size %>
+                <% col_format = @column_headers[i]&.dig(:format) %>
+                <td class="px-4 py-2 text-sm whitespace-nowrap <%= is_metric ? 'text-gray-200 font-mono tabular-nums text-right' : 'text-gray-400' %>">
+                  <% if col_format == :duration %>
+                    <%= format_duration(cell.to_i * 1000) %>
+                  <% elsif cell.is_a?(Numeric) && cell >= 1000 %>
+                    <%= number_with_delimiter(cell) %>
+                  <% else %>
+                    <%= cell.to_s.truncate(80) %>
+                  <% end %>
+                </td>
+              <% end %>
+            </tr>
+          <% end %>
+
+          <% if @results.rows.empty? %>
+            <tr>
+              <td colspan="<%= @column_headers.size %>" class="px-4 py-8 text-center text-gray-600">No results.</td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+<% elsif params[:metrics].blank? && request.get? %>
+  <div class="bg-surface-raised border border-border rounded-xl p-8 text-center">
+    <div class="text-gray-500 mb-4">Select at least one metric and click <strong class="text-gray-300">Run Query</strong></div>
+    <div class="text-sm text-gray-600 space-y-1">
+      <p>Example queries:</p>
+      <div class="flex flex-wrap justify-center gap-2 mt-3">
+        <%= link_to "Token cost per session",
+            queries_path(metrics: ["total_tokens", "total_input_tokens", "total_output_tokens"], dimensions: ["session"], sort_dir: "desc", limit: 25),
+            class: "px-3 py-1.5 rounded-full bg-surface border border-border text-xs text-gray-400 hover:text-white hover:border-accent transition" %>
+        <%= link_to "Tool usage ranking",
+            queries_path(metrics: ["tool_call_count", "session_count"], dimensions: ["tool_name"], sort_dir: "desc", limit: 30),
+            class: "px-3 py-1.5 rounded-full bg-surface border border-border text-xs text-gray-400 hover:text-white hover:border-accent transition" %>
+        <%= link_to "Daily activity",
+            queries_path(metrics: ["session_count", "total_tokens", "human_prompt_count"], dimensions: ["date"], sort_dir: "asc", limit: 60),
+            class: "px-3 py-1.5 rounded-full bg-surface border border-border text-xs text-gray-400 hover:text-white hover:border-accent transition" %>
+        <%= link_to "Tokens by model",
+            queries_path(metrics: ["total_tokens", "assistant_message_count", "avg_tokens_per_session"], dimensions: ["model"], sort_dir: "desc"),
+            class: "px-3 py-1.5 rounded-full bg-surface border border-border text-xs text-gray-400 hover:text-white hover:border-accent transition" %>
+        <%= link_to "Project breakdown",
+            queries_path(metrics: ["session_count", "total_tokens", "human_prompt_count", "tool_call_count"], dimensions: ["project"], sort_dir: "desc"),
+            class: "px-3 py-1.5 rounded-full bg-surface border border-border text-xs text-gray-400 hover:text-white hover:border-accent transition" %>
+        <%= link_to "Prompts per session",
+            queries_path(metrics: ["human_prompt_count", "message_count", "total_duration_s"], dimensions: ["session"], sort_dir: "desc", limit: 25),
+            class: "px-3 py-1.5 rounded-full bg-surface border border-border text-xs text-gray-400 hover:text-white hover:border-accent transition" %>
+      </div>
+    </div>
+  </div>
+<% end %>
+
+<script>
+function copyTable() {
+  const table = document.getElementById('results-table');
+  const rows = table.querySelectorAll('tr');
+  let tsv = '';
+  rows.forEach(row => {
+    const cells = row.querySelectorAll('th, td');
+    const values = Array.from(cells).map(c => c.textContent.trim());
+    tsv += values.join('\t') + '\n';
+  });
+  navigator.clipboard.writeText(tsv).then(() => {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1000);
+  });
+}
+</script>

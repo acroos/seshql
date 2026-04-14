@@ -1,0 +1,209 @@
+<% content_for(:title) { "SeshQL — SQL Console" } %>
+
+<div class="mb-6">
+  <h1 class="text-lg font-semibold text-white mb-1">SQL Console</h1>
+  <p class="text-sm text-gray-500">Write raw SQL queries against your session data. Only <code class="text-accent-light">SELECT</code> queries are permitted. Max <%= SqlConsoleController::MAX_ROWS %> rows.</p>
+</div>
+
+<div class="grid lg:grid-cols-4 gap-4 mb-6">
+  <!-- Query editor -->
+  <div class="lg:col-span-3">
+    <%= form_tag sql_console_index_path, method: :get do %>
+      <div class="bg-surface-raised border border-border rounded-xl overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-border flex items-center justify-between">
+          <span class="text-xs font-medium text-gray-400 uppercase tracking-wide">Query</span>
+          <div class="flex items-center gap-2">
+            <%= link_to "Clear", sql_console_index_path, class: "text-xs text-gray-500 hover:text-gray-300 transition" %>
+            <button type="submit" class="bg-accent hover:bg-accent-dim text-white text-xs font-medium px-4 py-1.5 rounded-lg transition">
+              Run Query
+            </button>
+          </div>
+        </div>
+        <textarea name="sql" rows="10" spellcheck="false" autofocus wrap="off"
+                  placeholder="SELECT ..."
+                  class="w-full bg-surface border-0 px-4 py-3 text-sm text-gray-200 font-mono leading-relaxed placeholder-gray-600 focus:outline-none focus:ring-0 resize-y overflow-x-auto"
+                  style="min-height: 120px;"><%= @sql %></textarea>
+      </div>
+      <p class="text-xs text-gray-600 mt-2">Tip: press <kbd class="px-1.5 py-0.5 bg-surface-raised border border-border rounded text-gray-400">Cmd+Enter</kbd> to run</p>
+    <% end %>
+  </div>
+
+  <!-- Schema reference -->
+  <div class="lg:col-span-1">
+    <div class="bg-surface-raised border border-border rounded-xl p-4 max-h-[480px] overflow-y-auto scrollbar-thin">
+      <h2 class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Schema Reference</h2>
+      <% @schema.each do |table, columns| %>
+        <details class="mb-2 group">
+          <summary class="cursor-pointer text-sm text-accent-light hover:text-white transition flex items-center gap-1">
+            <svg class="w-3 h-3 text-gray-500 group-open:rotate-90 transition-transform" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+            <%= table %>
+          </summary>
+          <div class="ml-4 mt-1 space-y-0.5">
+            <% columns.each do |col| %>
+              <div class="text-xs text-gray-500 font-mono"><%= col %></div>
+            <% end %>
+          </div>
+        </details>
+      <% end %>
+
+      <div class="mt-4 pt-3 border-t border-border">
+        <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Key Joins</h3>
+        <div class="text-xs text-gray-500 space-y-1 font-mono leading-relaxed">
+          <p>messages.session_id = sessions.session_id</p>
+          <p>assistant_messages.message_uuid = messages.uuid</p>
+          <p>content_blocks.assistant_message_uuid = assistant_messages.message_uuid</p>
+          <p>user_prompts.message_uuid = messages.uuid</p>
+          <p>tool_results.message_uuid = messages.uuid</p>
+          <p>system_events.message_uuid = messages.uuid</p>
+          <p>pr_links.session_id = sessions.session_id</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Error -->
+<% if @error %>
+  <div class="bg-red-950/50 border border-red-800/50 rounded-xl px-5 py-4 mb-6">
+    <div class="flex items-start gap-3">
+      <svg class="w-5 h-5 text-red-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+      </svg>
+      <div>
+        <p class="text-sm font-medium text-red-300">Query Error</p>
+        <p class="text-sm text-red-400/80 mt-1 font-mono"><%= @error %></p>
+      </div>
+    </div>
+  </div>
+<% end %>
+
+<!-- Results -->
+<% if @results %>
+  <div class="bg-surface-raised border border-border rounded-xl overflow-hidden">
+    <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+      <h2 class="text-sm font-medium text-gray-400">
+        Results
+        <span class="text-gray-600 ml-1">(<%= @results.rows.size %> row<%= @results.rows.size == 1 ? '' : 's' %><%= ", capped at #{SqlConsoleController::MAX_ROWS}" if @results.rows.size == SqlConsoleController::MAX_ROWS %>)</span>
+      </h2>
+      <button onclick="copySqlTable()" class="text-xs text-gray-500 hover:text-gray-300 transition px-2 py-1 rounded border border-border hover:border-border-light">
+        Copy as TSV
+      </button>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full" id="sql-results-table">
+        <thead>
+          <tr class="border-b border-border">
+            <% @results.columns.each do |col| %>
+              <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide whitespace-nowrap"><%= col %></th>
+            <% end %>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border/50">
+          <% @results.rows.each do |row| %>
+            <tr class="hover:bg-surface-hover transition">
+              <% row.each do |cell| %>
+                <td class="px-4 py-2 text-sm whitespace-nowrap font-mono text-gray-300 max-w-xs truncate" title="<%= h(cell.to_s) %>">
+                  <% if cell.nil? %>
+                    <span class="text-gray-600 italic">NULL</span>
+                  <% elsif cell.is_a?(Numeric) && cell >= 1000 %>
+                    <%= number_with_delimiter(cell) %>
+                  <% else %>
+                    <%= cell.to_s.truncate(120) %>
+                  <% end %>
+                </td>
+              <% end %>
+            </tr>
+          <% end %>
+
+          <% if @results.rows.empty? %>
+            <tr>
+              <td colspan="<%= @results.columns.size %>" class="px-4 py-8 text-center text-gray-600">No results.</td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+<% end %>
+
+<!-- Example queries (shown when no query) -->
+<% unless @sql.present? %>
+  <div class="bg-surface-raised border border-border rounded-xl p-6">
+    <h2 class="text-sm font-medium text-gray-400 mb-4">Example Queries</h2>
+    <div class="space-y-3">
+      <% @examples.each do |example| %>
+        <div class="group">
+          <button onclick="loadExample(this)" class="w-full text-left">
+            <div class="flex items-start gap-3 p-3 rounded-lg hover:bg-surface-hover transition">
+              <svg class="w-4 h-4 text-accent mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
+              </svg>
+              <div>
+                <p class="text-sm text-gray-300 font-medium"><%= example[:label] %></p>
+                <pre class="text-xs text-gray-500 mt-1 font-mono whitespace-pre-wrap hidden" data-sql><%= example[:sql] %></pre>
+              </div>
+            </div>
+          </button>
+        </div>
+      <% end %>
+    </div>
+  </div>
+<% end %>
+
+<script>
+function loadExample(button) {
+  const sql = button.querySelector('[data-sql]').textContent;
+  const textarea = document.querySelector('textarea[name="sql"]');
+  textarea.value = sql;
+  textarea.focus();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function copySqlTable() {
+  const table = document.getElementById('sql-results-table');
+  const rows = table.querySelectorAll('tr');
+  let tsv = '';
+  rows.forEach(row => {
+    const cells = row.querySelectorAll('th, td');
+    const values = Array.from(cells).map(c => c.textContent.trim());
+    tsv += values.join('\t') + '\n';
+  });
+  navigator.clipboard.writeText(tsv).then(() => {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1000);
+  });
+}
+
+// SQL textarea keyboard enhancements
+function initSqlTextarea() {
+  const ta = document.querySelector('textarea[name="sql"]');
+  if (!ta || ta.dataset.enhanced) return;
+  ta.dataset.enhanced = 'true';
+  ta.addEventListener('keydown', function(e) {
+    // Cmd+Enter to submit
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      this.closest('form').submit();
+      return;
+    }
+
+    // Tab inserts 2 spaces instead of moving focus
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = this.selectionStart;
+      const end = this.selectionEnd;
+      const value = this.value;
+      this.value = value.substring(0, start) + '  ' + value.substring(end);
+      this.selectionStart = this.selectionEnd = start + 2;
+    }
+  });
+}
+initSqlTextarea();
+document.addEventListener('turbo:load', initSqlTextarea);
+document.addEventListener('turbo:render', initSqlTextarea);
+</script>
