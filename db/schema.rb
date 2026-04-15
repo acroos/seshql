@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_14_000013) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_14_000014) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -114,6 +114,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_14_000013) do
     t.index ["session_id"], name: "index_pr_links_on_session_id"
   end
 
+  create_table "repos", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "filesystem_path"
+    t.string "name", null: false
+    t.string "remote_url"
+    t.datetime "updated_at", null: false
+    t.index ["name"], name: "index_repos_on_name", unique: true
+  end
+
   create_table "sessions", primary_key: "session_id", id: :string, force: :cascade do |t|
     t.string "agent_name"
     t.datetime "created_at", null: false
@@ -122,10 +131,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_14_000013) do
     t.text "last_prompt"
     t.string "permission_mode"
     t.string "project_path"
+    t.bigint "repo_id"
     t.datetime "updated_at", null: false
     t.jsonb "worktree_config", default: {}
     t.index ["created_at"], name: "index_sessions_on_created_at"
     t.index ["project_path"], name: "index_sessions_on_project_path"
+    t.index ["repo_id"], name: "index_sessions_on_repo_id"
   end
 
   create_table "system_events", primary_key: "message_uuid", id: :uuid, default: nil, force: :cascade do |t|
@@ -167,6 +178,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_14_000013) do
   add_foreign_key "file_history_snapshots", "sessions", primary_key: "session_id"
   add_foreign_key "messages", "sessions", primary_key: "session_id"
   add_foreign_key "pr_links", "sessions", primary_key: "session_id"
+  add_foreign_key "sessions", "repos"
   add_foreign_key "system_events", "messages", column: "message_uuid", primary_key: "uuid"
   add_foreign_key "tool_results", "messages", column: "message_uuid", primary_key: "uuid"
   add_foreign_key "user_prompts", "messages", column: "message_uuid", primary_key: "uuid"

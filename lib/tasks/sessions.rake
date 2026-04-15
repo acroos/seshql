@@ -12,6 +12,7 @@ namespace :sessions do
     jsonl_files = Dir.glob(File.join(projects_dir, "**", "*.jsonl"))
     puts "Found #{jsonl_files.size} JSONL files"
 
+    path_lookup = build_project_path_lookup
     ingested = 0
     skipped = 0
     errored = 0
@@ -26,7 +27,7 @@ namespace :sessions do
       end
 
       begin
-        ingest_session(file_path, session_id, project_path)
+        ingest_session(file_path, session_id, project_path, path_lookup)
         ingested += 1
         print "\r[#{idx + 1}/#{jsonl_files.size}] Ingested: #{ingested} | Skipped: #{skipped} | Errors: #{errored}"
       rescue => e
@@ -53,6 +54,7 @@ namespace :sessions do
     PrLink.delete_all
     FileHistorySnapshot.delete_all
     Session.delete_all
+    Repo.delete_all
     puts "Done. Re-ingesting..."
     Rake::Task["sessions:ingest"].invoke
   end
@@ -71,6 +73,30 @@ namespace :sessions do
         puts "  #{pr.pr_repository}##{pr.pr_number} → (failed)"
       end
     end
+  end
+
+  desc "Backfill repo associations for sessions missing one"
+  task backfill_repos: :environment do
+    sessions = Session.where(repo_id: nil).where.not(project_path: nil).to_a
+    puts "Found #{sessions.size} sessions without repo associations"
+
+    path_lookup = build_project_path_lookup
+    resolved = 0
+    failed = 0
+
+    sessions.group_by { |s| s.base_project_path }.each do |base_path, group|
+      repo = resolve_repo_from_project_path(base_path, path_lookup)
+      if repo
+        Session.where(session_id: group.map(&:session_id)).update_all(repo_id: repo.id)
+        resolved += group.size
+        puts "  #{base_path} → #{repo.name} (#{group.size} sessions)"
+      else
+        failed += group.size
+        puts "  #{base_path} → (could not resolve, #{group.size} sessions)"
+      end
+    end
+
+    puts "Done! Resolved: #{resolved} | Failed: #{failed}"
   end
 
   desc "Backfill inferred titles for sessions missing one"
@@ -124,14 +150,17 @@ namespace :sessions do
   end
 end
 
-def ingest_session(file_path, session_id, project_path)
+def ingest_session(file_path, session_id, project_path, path_lookup = nil)
   lines = File.readlines(file_path).map { |l| JSON.parse(l) }
   return if lines.empty?
 
   ActiveRecord::Base.transaction do
+    repo = resolve_repo_from_project_path(project_path, path_lookup)
+
     session = Session.create!(
       session_id: session_id,
-      project_path: project_path
+      project_path: project_path,
+      repo: repo
     )
 
     first_prompt_text = nil
@@ -341,6 +370,108 @@ def fetch_pr_title(repository, pr_number)
 rescue => e
   $stderr.puts "Warning: Could not fetch PR title for #{repository}##{pr_number}: #{e.message}"
   nil
+end
+
+# Build a lookup from encoded project directory name → real filesystem path
+# using ~/.claude/history.jsonl, which stores the actual paths.
+def build_project_path_lookup
+  history_file = File.expand_path("~/.claude/history.jsonl")
+  return {} unless File.exist?(history_file)
+
+  lookup = {}
+  File.foreach(history_file) do |line|
+    entry = JSON.parse(line)
+    real_path = entry["project"]
+    next unless real_path
+
+    # Claude Code encodes paths: / → - and . → -
+    encoded = real_path.gsub("/", "-").gsub(".", "-")
+    lookup[encoded] = real_path
+  end
+  lookup
+rescue => e
+  $stderr.puts "Warning: Could not read history.jsonl: #{e.message}"
+  {}
+end
+
+# Resolve a repo from a Claude Code project path using history.jsonl lookup.
+# Tries: remote URL → owner/repo, then falls back to local/<dirname> for
+# local-only git repos.
+def resolve_repo_from_project_path(project_path, path_lookup = nil)
+  return nil unless project_path.present?
+
+  path_lookup ||= build_project_path_lookup
+
+  # Strip worktree suffix to get the base project directory name
+  base_path = project_path.sub(/--claude-worktrees-.*$/, "")
+  fs_path = path_lookup[base_path]
+
+  # For worktree paths, resolve to the repo root
+  if fs_path && fs_path.include?("/.claude/worktrees/")
+    fs_path = fs_path.sub(%r{/\.claude/worktrees/.*$}, "")
+  end
+
+  return nil unless fs_path && Dir.exist?(fs_path)
+  return nil unless git_repo?(fs_path)
+
+  remote_url = git_remote_url(fs_path)
+
+  if remote_url
+    owner_repo = parse_owner_repo(remote_url)
+    return nil unless owner_repo
+
+    Repo.find_or_create_by!(name: owner_repo) do |r|
+      r.remote_url = remote_url
+      r.filesystem_path = fs_path
+    end
+  else
+    # Local-only git repo — use local/<dirname>
+    dir_name = File.basename(fs_path)
+    local_name = "local/#{dir_name}"
+
+    Repo.find_or_create_by!(name: local_name) do |r|
+      r.filesystem_path = fs_path
+    end
+  end
+rescue => e
+  $stderr.puts "Warning: Could not resolve repo for #{project_path}: #{e.message}"
+  nil
+end
+
+def git_repo?(path)
+  require "open3"
+  _, status = Open3.capture2("git", "-C", path, "rev-parse", "--git-dir")
+  status.success?
+rescue => e
+  false
+end
+
+def git_remote_url(path)
+  require "open3"
+  # Try origin first, then fall back to the first available remote
+  output, status = Open3.capture2("git", "-C", path, "remote", "get-url", "origin")
+  return output.strip.presence if status.success?
+
+  remotes, status = Open3.capture2("git", "-C", path, "remote")
+  return nil unless status.success?
+
+  first_remote = remotes.strip.lines.first&.strip
+  return nil unless first_remote
+
+  output, status = Open3.capture2("git", "-C", path, "remote", "get-url", first_remote)
+  return output.strip.presence if status.success?
+  nil
+rescue => e
+  nil
+end
+
+def parse_owner_repo(remote_url)
+  # SSH: git@github.com:owner/repo.git or HTTPS: https://github.com/owner/repo.git
+  if remote_url =~ %r{[:/]([^/]+)/([^/]+?)(?:\.git)?$}
+    "#{$1}/#{$2}"
+  else
+    nil
+  end
 end
 
 # Generate a concise session title from the first user prompt using Claude Haiku

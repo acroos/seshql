@@ -1,6 +1,7 @@
 class Session < ApplicationRecord
   self.primary_key = :session_id
 
+  belongs_to :repo, optional: true
   has_many :pr_links, foreign_key: :session_id, dependent: :destroy
   has_many :messages, foreign_key: :session_id, dependent: :destroy
   has_many :file_history_snapshots, foreign_key: :session_id, dependent: :destroy
