@@ -14,7 +14,7 @@ class Session < ApplicationRecord
   scope :titled, -> { where.not(custom_title: nil) }
 
   def display_title
-    custom_title.presence || inferred_title.presence || last_prompt&.truncate(80) || session_id
+    custom_title.presence || last_prompt&.truncate(80) || session_id
   end
 
   def total_input_tokens
