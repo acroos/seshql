@@ -11,7 +11,7 @@ class DashboardPanel < ApplicationRecord
   FORBIDDEN_PATTERNS = [
     /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY)\b/i,
     /\b(INTO\s+OUTFILE|LOAD\s+DATA|EXEC|EXECUTE)\b/i,
-    /;\s*\S/,
+    /;\s*\S/
   ].freeze
 
   def execute_query
@@ -55,13 +55,13 @@ class DashboardPanel < ApplicationRecord
 
     lookup = {}
     results.rows.each do |row|
-      lookup[[row[x_idx], row[series_idx]]] = row[value_idx].to_f
+      lookup[[ row[x_idx], row[series_idx] ]] = row[value_idx].to_f
     end
 
     datasets = series_names.map do |name|
       {
         label: name.to_s,
-        data: labels.map { |l| lookup[[l, name]] || 0 }
+        data: labels.map { |l| lookup[[ l, name ]] || 0 }
       }
     end
 
@@ -102,7 +102,7 @@ class DashboardPanel < ApplicationRecord
 
   def ensure_limit(sql)
     if sql.match?(/\bLIMIT\s+\d+/i)
-      sql.gsub(/\bLIMIT\s+(\d+)/i) { "LIMIT #{[Regexp.last_match(1).to_i, MAX_ROWS].min}" }
+      sql.gsub(/\bLIMIT\s+(\d+)/i) { "LIMIT #{[ Regexp.last_match(1).to_i, MAX_ROWS ].min}" }
     else
       "#{sql.chomp(';').strip}\nLIMIT #{MAX_ROWS}"
     end

@@ -5,7 +5,7 @@ class SqlConsoleController < ApplicationController
   FORBIDDEN_PATTERNS = [
     /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY)\b/i,
     /\b(INTO\s+OUTFILE|LOAD\s+DATA|EXEC|EXECUTE)\b/i,
-    /;\s*\S/,  # multiple statements
+    /;\s*\S/  # multiple statements
   ].freeze
 
   SCHEMA_REFERENCE = {
@@ -18,7 +18,7 @@ class SqlConsoleController < ApplicationController
     "system_events" => %w[message_uuid subtype duration_ms message_count hook_count prevented_continuation stop_reason has_output level is_meta hook_infos hook_errors],
     "pr_links" => %w[id session_id pr_number pr_url pr_repository linked_at],
     "file_history_snapshots" => %w[id session_id source_message_id is_snapshot_update tracked_files snapshot_timestamp],
-    "attachments" => %w[message_uuid attachment_type attachment_data],
+    "attachments" => %w[message_uuid attachment_type attachment_data]
   }.freeze
 
   EXAMPLE_QUERIES = [
@@ -300,7 +300,7 @@ class SqlConsoleController < ApplicationController
         GROUP BY am.model
         ORDER BY billable_tokens DESC
       SQL
-    },
+    }
   ].freeze
 
   def index
@@ -353,7 +353,7 @@ class SqlConsoleController < ApplicationController
     if sql.match?(/\bLIMIT\s+\d+/i)
       # Enforce max
       sql.gsub(/\bLIMIT\s+(\d+)/i) do
-        "LIMIT #{[Regexp.last_match(1).to_i, MAX_ROWS].min}"
+        "LIMIT #{[ Regexp.last_match(1).to_i, MAX_ROWS ].min}"
       end
     else
       "#{sql.chomp(';').strip}\nLIMIT #{MAX_ROWS}"

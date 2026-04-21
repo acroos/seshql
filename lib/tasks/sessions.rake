@@ -98,7 +98,6 @@ namespace :sessions do
 
     puts "Done! Resolved: #{resolved} | Failed: #{failed}"
   end
-
 end
 
 def ingest_session(file_path, session_id, project_path, path_lookup = nil)
