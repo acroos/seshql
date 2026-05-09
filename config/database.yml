@@ -8,8 +8,21 @@ default: &default
   password: <%= ENV.fetch("DATABASE_PASSWORD") { "seshql" } %>
 
 development:
-  <<: *default
-  database: seshql_development
+  primary:
+    <<: *default
+    database: seshql_development
+  cache:
+    <<: *default
+    database: seshql_development_cache
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *default
+    database: seshql_development_queue
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *default
+    database: seshql_development_cable
+    migrations_paths: db/cable_migrate
 
 test:
   <<: *default

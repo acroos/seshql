@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_15_000001) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_09_032429) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -48,6 +48,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_15_000001) do
     t.jsonb "tool_input", default: {}
     t.string "tool_name"
     t.string "tool_use_id"
+    t.index ["assistant_message_uuid", "position"], name: "uniq_content_blocks_on_assistant_position", unique: true
     t.index ["assistant_message_uuid"], name: "index_content_blocks_on_assistant_message_uuid"
     t.index ["block_type"], name: "index_content_blocks_on_block_type"
     t.index ["tool_name"], name: "index_content_blocks_on_tool_name"
@@ -81,6 +82,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_15_000001) do
     t.datetime "snapshot_timestamp"
     t.string "source_message_id", null: false
     t.jsonb "tracked_files", default: {}
+    t.index ["session_id", "source_message_id"], name: "uniq_file_history_on_session_source", unique: true
     t.index ["session_id"], name: "index_file_history_snapshots_on_session_id"
     t.index ["source_message_id"], name: "index_file_history_snapshots_on_source_message_id"
   end
@@ -111,6 +113,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_15_000001) do
     t.string "pr_url"
     t.string "session_id", null: false
     t.index ["pr_repository"], name: "index_pr_links_on_pr_repository"
+    t.index ["session_id", "pr_repository", "pr_number"], name: "uniq_pr_links_on_session_repo_number", unique: true
     t.index ["session_id"], name: "index_pr_links_on_session_id"
   end
 
@@ -127,6 +130,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_15_000001) do
     t.string "agent_name"
     t.datetime "created_at", null: false
     t.string "custom_title"
+    t.datetime "file_mtime"
+    t.bigint "file_size"
+    t.bigint "last_byte_offset", default: 0, null: false
+    t.datetime "last_ingested_at"
     t.text "last_prompt"
     t.string "permission_mode"
     t.string "project_path"
@@ -134,6 +141,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_15_000001) do
     t.datetime "updated_at", null: false
     t.jsonb "worktree_config", default: {}
     t.index ["created_at"], name: "index_sessions_on_created_at"
+    t.index ["file_mtime"], name: "index_sessions_on_file_mtime"
     t.index ["project_path"], name: "index_sessions_on_project_path"
     t.index ["repo_id"], name: "index_sessions_on_repo_id"
   end
