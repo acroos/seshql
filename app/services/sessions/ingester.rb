@@ -48,15 +48,14 @@ module Sessions
       records = read_records(offset)
       return 0 if records.empty? && session.persisted?
 
+      newly_created = session.new_record?
+      new_pr_link_keys = []
+
       ActiveRecord::Base.transaction do
-        # Save session first so FKs from messages succeed.
-        if session.new_record?
-          session.repo ||= RepoResolver.call(session.project_path, path_lookup: @path_lookup)
-          session.save!
-        end
+        session.save! if newly_created
 
         apply_session_records(session, records)
-        bulk_insert_messages(session, records)
+        new_pr_link_keys = bulk_insert_messages(session, records)
 
         session.update!(
           file_mtime: stat.mtime,
@@ -67,7 +66,21 @@ module Sessions
         )
       end
 
+      enqueue_enrichment(session, newly_created, new_pr_link_keys)
+
       records.size
+    end
+
+    def enqueue_enrichment(session, newly_created, new_pr_link_keys)
+      ResolveRepoJob.perform_later(session.session_id) if newly_created && session.repo_id.nil?
+
+      return if new_pr_link_keys.empty?
+      ids = PrLink.where(
+        session_id: session.session_id,
+        pr_repository: new_pr_link_keys.map { |k| k[:pr_repository] }.uniq,
+        pr_number: new_pr_link_keys.map { |k| k[:pr_number] }.uniq
+      ).where(pr_title: nil).pluck(:id)
+      ids.each { |id| EnrichPrLinkJob.perform_later(id) }
     end
 
     def read_records(offset)
@@ -133,6 +146,8 @@ module Sessions
       Attachment.upsert_all(attachments, unique_by: :message_uuid) if attachments.any?
       PrLink.upsert_all(pr_links, unique_by: "uniq_pr_links_on_session_repo_number") if pr_links.any?
       FileHistorySnapshot.upsert_all(file_history, unique_by: "uniq_file_history_on_session_source") if file_history.any?
+
+      pr_links.map { |pl| { pr_repository: pl[:pr_repository], pr_number: pl[:pr_number] } }
     end
 
     def build_user_record(r, session, messages, user_prompts, tool_results)
