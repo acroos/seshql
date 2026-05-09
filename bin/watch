@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+require_relative "../config/environment"
+require "listen"
+
+dir = File.expand_path("~/.claude/projects")
+abort "[watch] no projects dir at #{dir}" unless Dir.exist?(dir)
+
+listener = Listen.to(dir, only: /\.jsonl$/, wait_for_delay: 0.5) do |modified, added, _removed|
+  paths = (modified + added).uniq
+  next if paths.empty?
+  Rails.application.executor.wrap do
+    paths.each do |path|
+      IngestSessionFileJob.perform_later(path)
+    end
+  end
+  Rails.logger.info("[watch] enqueued #{paths.size}")
+end
+
+listener.start
+puts "[watch] watching #{dir}"
+sleep
