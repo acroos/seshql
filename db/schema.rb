@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_05_09_032429) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_09_034105) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -85,6 +85,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_09_032429) do
     t.index ["session_id", "source_message_id"], name: "uniq_file_history_on_session_source", unique: true
     t.index ["session_id"], name: "index_file_history_snapshots_on_session_id"
     t.index ["source_message_id"], name: "index_file_history_snapshots_on_source_message_id"
+  end
+
+  create_table "ingestion_runs", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.integer "duration_ms"
+    t.string "error_class"
+    t.text "error_message"
+    t.string "file_path", null: false
+    t.integer "lines_processed"
+    t.datetime "run_at", null: false
+    t.string "status", null: false
+    t.datetime "updated_at", null: false
+    t.index ["file_path", "run_at"], name: "index_ingestion_runs_on_file_path_and_run_at"
+    t.index ["run_at"], name: "index_ingestion_runs_on_run_at"
+    t.index ["status"], name: "index_ingestion_runs_on_status"
   end
 
   create_table "messages", primary_key: "uuid", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

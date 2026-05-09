@@ -49,8 +49,13 @@
                 <%= link_to "SQL Console", sql_console_index_path, class: "px-3 py-1.5 rounded-md text-sm #{request.path.start_with?('/sql_console') ? 'bg-surface text-white' : 'text-gray-400 hover:text-white hover:bg-surface-hover'} transition" %>
               </div>
             </div>
-            <div class="text-xs text-gray-500">
-              <%= Session.count %> sessions &middot; <%= number_with_delimiter(Message.count) %> messages
+            <div class="flex items-center gap-3 text-xs text-gray-500">
+              <span><%= Session.count %> sessions &middot; <%= number_with_delimiter(Message.count) %> messages</span>
+              <% recent_failures = IngestionRun.failures.where("run_at > ?", 24.hours.ago).count %>
+              <%= link_to ingestion_runs_path, class: "flex items-center gap-1.5 px-2 py-1 rounded #{recent_failures.positive? ? 'text-red-400 hover:bg-red-950/40' : 'text-gray-500 hover:bg-surface-hover'} transition", title: "Ingestion runs" do %>
+                <span class="<%= recent_failures.positive? ? 'bg-red-500' : 'bg-green-500' %> w-1.5 h-1.5 rounded-full"></span>
+                <span>ingest<%= recent_failures.positive? ? " (#{recent_failures})" : "" %></span>
+              <% end %>
             </div>
           </div>
         </div>

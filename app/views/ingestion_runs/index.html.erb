@@ -1,0 +1,66 @@
+<% content_for(:title) { "SeshQL — Ingestion" } %>
+
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-lg font-semibold text-white mb-1">Ingestion</h1>
+    <p class="text-sm text-gray-500">Recent ingestion runs from the auto-ingest pipeline. Failures can be retried.</p>
+  </div>
+  <% if @failure_count.positive? %>
+    <span class="text-xs text-red-400 bg-red-950/40 border border-red-900/40 px-3 py-1.5 rounded-full">
+      <%= @failure_count %> failure<%= @failure_count == 1 ? "" : "s" %> in the last 24h
+    </span>
+  <% end %>
+</div>
+
+<% if @runs.any? %>
+  <div class="bg-surface-raised border border-border rounded-xl overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-surface text-gray-500 text-xs uppercase tracking-wider">
+        <tr>
+          <th class="text-left px-4 py-3 font-medium">Status</th>
+          <th class="text-left px-4 py-3 font-medium">File</th>
+          <th class="text-right px-4 py-3 font-medium">Lines</th>
+          <th class="text-right px-4 py-3 font-medium">Duration</th>
+          <th class="text-right px-4 py-3 font-medium">When</th>
+          <th class="text-right px-4 py-3 font-medium"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-border">
+        <% @runs.each do |run| %>
+          <tr class="hover:bg-surface-hover">
+            <td class="px-4 py-3">
+              <% if run.succeeded? %>
+                <span class="text-green-400 text-xs">● succeeded</span>
+              <% elsif run.failed? %>
+                <span class="text-red-400 text-xs">● failed</span>
+              <% else %>
+                <span class="text-gray-500 text-xs">● <%= run.status %></span>
+              <% end %>
+            </td>
+            <td class="px-4 py-3 text-gray-300 font-mono text-xs">
+              <div><%= File.basename(run.file_path) %></div>
+              <% if run.failed? && run.error_message.present? %>
+                <div class="text-red-400/70 text-xs mt-1 max-w-xl truncate" title="<%= run.error_message %>">
+                  <%= run.error_class %>: <%= run.error_message %>
+                </div>
+              <% end %>
+            </td>
+            <td class="px-4 py-3 text-right text-gray-400 tabular-nums"><%= run.lines_processed || "—" %></td>
+            <td class="px-4 py-3 text-right text-gray-400 tabular-nums"><%= run.duration_ms ? "#{run.duration_ms} ms" : "—" %></td>
+            <td class="px-4 py-3 text-right text-gray-500 text-xs"><%= time_ago_short(run.run_at) %></td>
+            <td class="px-4 py-3 text-right">
+              <% if run.failed? %>
+                <%= button_to "Retry", retry_ingestion_run_path(run), method: :post, class: "text-xs text-gray-400 hover:text-white border border-border hover:border-border-light px-3 py-1 rounded transition" %>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+<% else %>
+  <div class="bg-surface-raised border border-border rounded-xl p-12 text-center">
+    <p class="text-gray-400 mb-2">No ingestion runs yet</p>
+    <p class="text-sm text-gray-600">Once Claude Code writes session files, they'll appear here.</p>
+  </div>
+<% end %>

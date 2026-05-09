@@ -14,6 +14,18 @@ module Sessions
     end
 
     def call
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      result = run
+      record_run(result, started)
+      result
+    rescue => e
+      record_run(Result.new(status: :failed, lines_processed: 0, error: e), started)
+      raise
+    end
+
+    private
+
+    def run
       return Result.new(status: :missing, lines_processed: 0) unless File.exist?(@file_path)
 
       stat = File.stat(@file_path)
@@ -35,7 +47,22 @@ module Sessions
       Result.new(status: :succeeded, lines_processed: lines_processed)
     end
 
-    private
+    def record_run(result, started)
+      return if result.status == :skipped # avoid noise
+
+      duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round
+      IngestionRun.create!(
+        file_path: @file_path,
+        status: result.status.to_s,
+        error_class: result.error&.class&.name,
+        error_message: result.error&.message,
+        lines_processed: result.lines_processed,
+        duration_ms: duration_ms,
+        run_at: Time.current
+      )
+    rescue => e
+      Rails.logger.warn("[ingester] failed to record run: #{e.message}")
+    end
 
     def up_to_date?(session, stat)
       session.persisted? &&

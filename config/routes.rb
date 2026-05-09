@@ -3,6 +3,9 @@ Rails.application.routes.draw do
 
   resources :sessions, only: [ :index, :show ]
   resources :sql_console, only: [ :index ]
+  resources :ingestion_runs, only: [ :index ] do
+    member { post :retry }
+  end
 
   resources :dashboards do
     resources :panels, only: [ :new, :create, :edit, :update, :destroy ]
