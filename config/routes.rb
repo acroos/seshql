@@ -1,8 +1,7 @@
 Rails.application.routes.draw do
-  root "dashboard#index"
+  root "dashboards#index"
 
   resources :sessions, only: [ :index, :show ]
-  resources :queries, only: [ :index ]
   resources :sql_console, only: [ :index ]
 
   resources :dashboards do
