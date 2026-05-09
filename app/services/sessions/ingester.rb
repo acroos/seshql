@@ -164,6 +164,16 @@ module Sessions
         end
       end
 
+      messages       = dedupe_last(messages)       { |r| r[:uuid] }
+      user_prompts   = dedupe_last(user_prompts)   { |r| r[:message_uuid] }
+      tool_results   = dedupe_last(tool_results)   { |r| r[:message_uuid] }
+      assistant_msgs = dedupe_last(assistant_msgs) { |r| r[:message_uuid] }
+      content_blocks = dedupe_last(content_blocks) { |r| [ r[:assistant_message_uuid], r[:position] ] }
+      system_events  = dedupe_last(system_events)  { |r| r[:message_uuid] }
+      attachments    = dedupe_last(attachments)    { |r| r[:message_uuid] }
+      pr_links       = dedupe_last(pr_links)       { |r| [ r[:session_id], r[:pr_repository], r[:pr_number] ] }
+      file_history   = dedupe_last(file_history)   { |r| [ r[:session_id], r[:source_message_id] ] }
+
       Message.upsert_all(messages, unique_by: :uuid) if messages.any?
       UserPrompt.upsert_all(user_prompts, unique_by: :message_uuid) if user_prompts.any?
       ToolResult.upsert_all(tool_results, unique_by: :message_uuid) if tool_results.any?
@@ -175,6 +185,12 @@ module Sessions
       FileHistorySnapshot.upsert_all(file_history, unique_by: "uniq_file_history_on_session_source") if file_history.any?
 
       pr_links.map { |pl| { pr_repository: pl[:pr_repository], pr_number: pl[:pr_number] } }
+    end
+
+    def dedupe_last(rows)
+      seen = {}
+      rows.each { |r| seen[yield(r)] = r }
+      seen.values
     end
 
     def build_user_record(r, session, messages, user_prompts, tool_results)
