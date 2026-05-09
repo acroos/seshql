@@ -22,6 +22,9 @@ class SessionsController < ApplicationController
     @session = Session.find(params[:id])
     @messages = @session.messages.main_chain.chronological
       .includes(:user_prompt, :tool_result, { assistant_message: :content_blocks }, :system_event, :attachment)
+    @tool_results_by_use_id = @messages
+      .filter_map(&:tool_result)
+      .index_by(&:tool_use_id)
     @tool_usage = @session.tool_usage_summary
     @total_input = @session.assistant_messages.sum(:input_tokens) +
       @session.assistant_messages.sum(:cache_creation_input_tokens) +
