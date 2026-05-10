@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_05_09_034105) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_09_200000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -41,6 +41,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_09_034105) do
 
   create_table "content_blocks", force: :cascade do |t|
     t.uuid "assistant_message_uuid", null: false
+    t.virtual "bash_command", type: :text, as: "\nCASE\n    WHEN ((tool_name)::text = 'Bash'::text) THEN (tool_input ->> 'command'::text)\n    ELSE NULL::text\nEND", stored: true
+    t.virtual "bash_programs", type: :text, array: true, as: "\nCASE\n    WHEN ((tool_name)::text = 'Bash'::text) THEN bash_programs((tool_input ->> 'command'::text))\n    ELSE NULL::text[]\nEND", stored: true
     t.enum "block_type", null: false, enum_type: "block_type"
     t.integer "position", null: false
     t.text "text_content"
@@ -50,6 +52,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_09_034105) do
     t.string "tool_use_id"
     t.index ["assistant_message_uuid", "position"], name: "uniq_content_blocks_on_assistant_position", unique: true
     t.index ["assistant_message_uuid"], name: "index_content_blocks_on_assistant_message_uuid"
+    t.index ["bash_programs"], name: "index_content_blocks_on_bash_programs", using: :gin
     t.index ["block_type"], name: "index_content_blocks_on_block_type"
     t.index ["tool_name"], name: "index_content_blocks_on_tool_name"
   end
