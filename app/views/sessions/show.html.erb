@@ -1,4 +1,4 @@
-<% content_for(:title) { "SeshQL — #{@session.display_title}" } %>
+<% content_for(:title) { "SeshQL — #{@session.display_label}" } %>
 
 <!-- Breadcrumb -->
 <div class="mb-6">
@@ -9,7 +9,7 @@
 <div class="bg-surface-raised border border-border rounded-xl p-5 mb-6">
   <div class="flex items-start justify-between gap-4 mb-4">
     <div>
-      <h1 class="text-lg font-semibold text-white mb-1"><%= @session.display_title %></h1>
+      <h1 class="text-lg font-semibold text-white mb-1"><%= @session.title %></h1>
       <div class="flex items-center gap-3 text-xs text-gray-500">
         <span class="font-mono"><%= format_project(@session.project_path) %></span>
         <% if @session.agent_name %>

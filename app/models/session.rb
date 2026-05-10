@@ -13,8 +13,27 @@ class Session < ApplicationRecord
   scope :recent, -> { order(created_at: :desc) }
   scope :titled, -> { where.not(custom_title: nil) }
 
-  def display_title
+  def title
     custom_title.presence || last_prompt&.truncate(80) || session_id
+  end
+  alias_method :display_title, :title
+
+  def repo_name
+    repo&.repo_name
+  end
+
+  def directory
+    base_project_path.presence&.gsub(/^-/, "")&.gsub("-", "/")
+  end
+
+  def branch
+    messages.where.not(git_branch: nil).order(timestamp: :asc).limit(1).pick(:git_branch)
+  end
+
+  def display_label
+    head = repo_name.presence || directory&.then { |d| File.basename(d) }.presence || "?"
+    qualifier = worktree_name.presence || branch.presence
+    "#{head}#{"@#{qualifier}" if qualifier} — #{title}"
   end
 
   def total_input_tokens

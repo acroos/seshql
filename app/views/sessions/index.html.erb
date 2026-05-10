@@ -35,7 +35,7 @@
     <%= link_to session_path(session), class: "block px-5 py-4 hover:bg-surface-hover transition group" do %>
       <div class="flex items-start justify-between gap-4 mb-2">
         <div class="min-w-0">
-          <div class="text-sm text-gray-200 group-hover:text-white truncate"><%= session.display_title %></div>
+          <div class="text-sm text-gray-200 group-hover:text-white truncate"><%= session.title %></div>
           <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
             <span class="font-mono"><%= short_project(session.base_project_path) %></span>
             <% if session.worktree_name %>
