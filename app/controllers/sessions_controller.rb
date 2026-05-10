@@ -26,10 +26,8 @@ class SessionsController < ApplicationController
       .filter_map(&:tool_result)
       .index_by(&:tool_use_id)
     @tool_usage = @session.tool_usage_summary
-    @total_input = @session.assistant_messages.sum(:input_tokens) +
-      @session.assistant_messages.sum(:cache_creation_input_tokens) +
-      @session.assistant_messages.sum(:cache_read_input_tokens)
-    @total_output = @session.assistant_messages.sum(:output_tokens)
+    @total_input = @session.total_input_tokens
+    @total_output = @session.total_output_tokens
     @duration_ms = @session.system_events.where(subtype: "turn_duration").sum(:duration_ms)
   end
 end

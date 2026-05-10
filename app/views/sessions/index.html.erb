@@ -38,8 +38,8 @@
           <div class="text-sm text-gray-200 group-hover:text-white truncate"><%= session.title %></div>
           <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
             <span class="font-mono"><%= short_project(session.base_project_path) %></span>
-            <% if session.worktree_name %>
-              <span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[11px]"><%= session.worktree_name %></span>
+            <% if session.worktree %>
+              <span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[11px]"><%= session.worktree %></span>
             <% end %>
             <% if session.agent_name %>
               <span class="text-accent-light"><%= session.agent_name %></span>

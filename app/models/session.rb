@@ -13,37 +13,14 @@ class Session < ApplicationRecord
   scope :recent, -> { order(created_at: :desc) }
   scope :titled, -> { where.not(custom_title: nil) }
 
-  def title
-    custom_title.presence || last_prompt&.truncate(80) || session_id
-  end
-  alias_method :display_title, :title
-
   def repo_name
     repo&.repo_name
   end
 
-  def directory
-    base_project_path.presence&.gsub(/^-/, "")&.gsub("-", "/")
-  end
-
-  def branch
-    messages.where.not(git_branch: nil).order(timestamp: :asc).limit(1).pick(:git_branch)
-  end
-
   def display_label
     head = repo_name.presence || directory&.then { |d| File.basename(d) }.presence || "?"
-    qualifier = worktree_name.presence || branch.presence
+    qualifier = worktree.presence || branch.presence
     "#{head}#{"@#{qualifier}" if qualifier} — #{title}"
-  end
-
-  def total_input_tokens
-    assistant_messages.sum(:input_tokens) +
-      assistant_messages.sum(:cache_creation_input_tokens) +
-      assistant_messages.sum(:cache_read_input_tokens)
-  end
-
-  def total_output_tokens
-    assistant_messages.sum(:output_tokens)
   end
 
   def total_tokens
@@ -75,11 +52,6 @@ class Session < ApplicationRecord
   def base_project_path
     return project_path unless project_path
     project_path.sub(/--claude-worktrees-.*$/, "")
-  end
-
-  def worktree_name
-    return nil unless project_path&.include?("--claude-worktrees-")
-    project_path.split("--claude-worktrees-").last
   end
 
   def project_name

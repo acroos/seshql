@@ -83,6 +83,7 @@ module Sessions
 
         apply_session_records(session, records)
         new_pr_link_keys = bulk_insert_messages(session, records)
+        recompute_session_aggregates(session)
 
         session.update!(
           file_mtime: stat.mtime,
@@ -333,6 +334,54 @@ module Sessions
 
     def earliest_message_timestamp(session)
       Message.where(session_id: session.session_id).minimum(:timestamp)
+    end
+
+    RECOMPUTE_AGGREGATES_SQL = <<~SQL.freeze
+      UPDATE sessions SET
+        branch              = sub.branch,
+        first_prompt        = sub.first_prompt,
+        ended_at            = sub.ended_at,
+        total_input_tokens  = sub.total_input_tokens,
+        total_output_tokens = sub.total_output_tokens,
+        tools_used          = sub.tools_used
+      FROM (
+        SELECT
+          (SELECT git_branch FROM messages
+             WHERE session_id = ? AND git_branch IS NOT NULL
+             ORDER BY timestamp ASC LIMIT 1) AS branch,
+          (SELECT up.content_text FROM user_prompts up
+             JOIN messages m ON m.uuid = up.message_uuid
+             WHERE m.session_id = ?
+             ORDER BY m.timestamp ASC LIMIT 1) AS first_prompt,
+          (SELECT MAX(timestamp) FROM messages WHERE session_id = ?) AS ended_at,
+          COALESCE((SELECT SUM(am.input_tokens + am.cache_creation_input_tokens + am.cache_read_input_tokens)
+             FROM assistant_messages am
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = ?), 0) AS total_input_tokens,
+          COALESCE((SELECT SUM(am.output_tokens)
+             FROM assistant_messages am
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = ?), 0) AS total_output_tokens,
+          COALESCE((SELECT array_agg(DISTINCT cb.tool_name)
+             FROM content_blocks cb
+             JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = ?
+               AND cb.block_type = 'tool_use'
+               AND cb.tool_name IS NOT NULL), ARRAY[]::text[]) AS tools_used
+      ) sub
+      WHERE sessions.session_id = ?;
+    SQL
+
+    def self.recompute_aggregates(session_id)
+      sql = ActiveRecord::Base.sanitize_sql_array(
+        [RECOMPUTE_AGGREGATES_SQL] + Array.new(7, session_id)
+      )
+      Session.connection.exec_update(sql, "RecomputeSessionAggregates")
+    end
+
+    def recompute_session_aggregates(session)
+      self.class.recompute_aggregates(session.session_id)
     end
   end
 end
