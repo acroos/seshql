@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_05_10_180715) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_30_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -23,6 +23,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_10_180715) do
     t.string "api_message_id"
     t.integer "cache_creation_input_tokens", default: 0
     t.integer "cache_read_input_tokens", default: 0
+    t.decimal "cost_usd", precision: 12, scale: 6
     t.integer "input_tokens", default: 0
     t.string "model"
     t.integer "output_tokens", default: 0
@@ -145,7 +146,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_10_180715) do
   end
 
   create_table "sessions", primary_key: "session_id", id: :string, force: :cascade do |t|
+    t.bigint "active_duration_ms", default: 0, null: false
     t.string "agent_name"
+    t.integer "assistant_message_count", default: 0, null: false
     t.string "branch"
     t.datetime "created_at", null: false
     t.string "custom_title"
@@ -153,26 +156,35 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_10_180715) do
     t.datetime "ended_at"
     t.datetime "file_mtime"
     t.bigint "file_size"
+    t.integer "files_edited_count", default: 0, null: false
     t.text "first_prompt"
+    t.integer "git_commit_count", default: 0, null: false
     t.bigint "last_byte_offset", default: 0, null: false
     t.datetime "last_ingested_at"
     t.text "last_prompt"
     t.string "permission_mode"
+    t.integer "pr_link_count", default: 0, null: false
     t.string "project_path"
     t.bigint "repo_id"
     t.virtual "title", type: :text, as: "COALESCE(NULLIF((custom_title)::text, ''::text), \"left\"(NULLIF(first_prompt, ''::text), 80), \"left\"(NULLIF(last_prompt, ''::text), 80), (session_id)::text)", stored: true
     t.string "tools_used", default: [], array: true
+    t.bigint "total_cache_creation_tokens", default: 0, null: false
+    t.bigint "total_cache_read_tokens", default: 0, null: false
+    t.decimal "total_cost_usd", precision: 12, scale: 6
     t.bigint "total_input_tokens", default: 0, null: false
     t.bigint "total_output_tokens", default: 0, null: false
     t.datetime "updated_at", null: false
+    t.integer "user_message_count", default: 0, null: false
     t.virtual "worktree", type: :text, as: "NULLIF(split_part((project_path)::text, '--claude-worktrees-'::text, 2), ''::text)", stored: true
     t.jsonb "worktree_config", default: {}
+    t.index ["active_duration_ms"], name: "index_sessions_on_active_duration_ms"
     t.index ["created_at"], name: "index_sessions_on_created_at"
     t.index ["ended_at"], name: "index_sessions_on_ended_at"
     t.index ["file_mtime"], name: "index_sessions_on_file_mtime"
     t.index ["project_path"], name: "index_sessions_on_project_path"
     t.index ["repo_id"], name: "index_sessions_on_repo_id"
     t.index ["tools_used"], name: "index_sessions_on_tools_used", using: :gin
+    t.index ["total_cost_usd"], name: "index_sessions_on_total_cost_usd"
     t.index ["worktree"], name: "index_sessions_on_worktree"
   end
 

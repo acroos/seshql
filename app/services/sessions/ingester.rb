@@ -243,7 +243,8 @@ module Sessions
         output_tokens: usage["output_tokens"] || 0,
         cache_creation_input_tokens: usage["cache_creation_input_tokens"] || 0,
         cache_read_input_tokens: usage["cache_read_input_tokens"] || 0,
-        usage_details: usage.except("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+        usage_details: usage.except("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"),
+        cost_usd: Pricing.cost_for_usage(msg["model"], usage)
       }
 
       (msg["content"] || []).each_with_index do |block, position|
@@ -338,44 +339,95 @@ module Sessions
 
     RECOMPUTE_AGGREGATES_SQL = <<~SQL.freeze
       UPDATE sessions SET
-        branch              = sub.branch,
-        first_prompt        = sub.first_prompt,
-        ended_at            = sub.ended_at,
-        total_input_tokens  = sub.total_input_tokens,
-        total_output_tokens = sub.total_output_tokens,
-        tools_used          = sub.tools_used
+        branch                      = sub.branch,
+        first_prompt                = sub.first_prompt,
+        ended_at                    = sub.ended_at,
+        total_input_tokens          = sub.total_input_tokens,
+        total_output_tokens         = sub.total_output_tokens,
+        total_cache_creation_tokens = sub.total_cache_creation_tokens,
+        total_cache_read_tokens     = sub.total_cache_read_tokens,
+        total_cost_usd              = sub.total_cost_usd,
+        user_message_count          = sub.user_message_count,
+        assistant_message_count     = sub.assistant_message_count,
+        active_duration_ms          = sub.active_duration_ms,
+        pr_link_count               = sub.pr_link_count,
+        files_edited_count          = sub.files_edited_count,
+        git_commit_count            = sub.git_commit_count,
+        tools_used                  = sub.tools_used
       FROM (
         SELECT
           (SELECT git_branch FROM messages
-             WHERE session_id = ? AND git_branch IS NOT NULL
+             WHERE session_id = :session_id AND git_branch IS NOT NULL
              ORDER BY timestamp ASC LIMIT 1) AS branch,
           (SELECT up.content_text FROM user_prompts up
              JOIN messages m ON m.uuid = up.message_uuid
-             WHERE m.session_id = ?
+             WHERE m.session_id = :session_id
              ORDER BY m.timestamp ASC LIMIT 1) AS first_prompt,
-          (SELECT MAX(timestamp) FROM messages WHERE session_id = ?) AS ended_at,
+          (SELECT MAX(timestamp) FROM messages WHERE session_id = :session_id) AS ended_at,
           COALESCE((SELECT SUM(am.input_tokens + am.cache_creation_input_tokens + am.cache_read_input_tokens)
              FROM assistant_messages am
              JOIN messages m ON m.uuid = am.message_uuid
-             WHERE m.session_id = ?), 0) AS total_input_tokens,
+             WHERE m.session_id = :session_id), 0) AS total_input_tokens,
           COALESCE((SELECT SUM(am.output_tokens)
              FROM assistant_messages am
              JOIN messages m ON m.uuid = am.message_uuid
-             WHERE m.session_id = ?), 0) AS total_output_tokens,
+             WHERE m.session_id = :session_id), 0) AS total_output_tokens,
+          COALESCE((SELECT SUM(am.cache_creation_input_tokens)
+             FROM assistant_messages am
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = :session_id), 0) AS total_cache_creation_tokens,
+          COALESCE((SELECT SUM(am.cache_read_input_tokens)
+             FROM assistant_messages am
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = :session_id), 0) AS total_cache_read_tokens,
+          (SELECT SUM(am.cost_usd)
+             FROM assistant_messages am
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = :session_id) AS total_cost_usd,
+          (SELECT COUNT(*)
+             FROM user_prompts up
+             JOIN messages m ON m.uuid = up.message_uuid
+             WHERE m.session_id = :session_id
+               AND m.is_sidechain = false
+               AND up.is_meta = false) AS user_message_count,
+          (SELECT COUNT(*)
+             FROM assistant_messages am
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = :session_id) AS assistant_message_count,
+          COALESCE((SELECT SUM(se.duration_ms)
+             FROM system_events se
+             JOIN messages m ON m.uuid = se.message_uuid
+             WHERE m.session_id = :session_id
+               AND se.subtype = 'turn_duration'), 0) AS active_duration_ms,
+          (SELECT COUNT(*) FROM pr_links WHERE session_id = :session_id) AS pr_link_count,
+          (SELECT COUNT(DISTINCT cb.tool_input ->> 'file_path')
+             FROM content_blocks cb
+             JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = :session_id
+               AND cb.block_type = 'tool_use'
+               AND cb.tool_name IN ('Edit', 'Write', 'NotebookEdit')
+               AND cb.tool_input ->> 'file_path' IS NOT NULL) AS files_edited_count,
+          (SELECT COUNT(*)
+             FROM content_blocks cb
+             JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
+             JOIN messages m ON m.uuid = am.message_uuid
+             WHERE m.session_id = :session_id
+               AND cb.bash_command ~ '(^|[;&|]\\s*)git\\s+commit') AS git_commit_count,
           COALESCE((SELECT array_agg(DISTINCT cb.tool_name)
              FROM content_blocks cb
              JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
              JOIN messages m ON m.uuid = am.message_uuid
-             WHERE m.session_id = ?
+             WHERE m.session_id = :session_id
                AND cb.block_type = 'tool_use'
                AND cb.tool_name IS NOT NULL), ARRAY[]::text[]) AS tools_used
       ) sub
-      WHERE sessions.session_id = ?;
+      WHERE sessions.session_id = :session_id;
     SQL
 
     def self.recompute_aggregates(session_id)
       sql = ActiveRecord::Base.sanitize_sql_array(
-        [RECOMPUTE_AGGREGATES_SQL] + Array.new(7, session_id)
+        [ RECOMPUTE_AGGREGATES_SQL, { session_id: session_id } ]
       )
       Session.connection.exec_update(sql, "RecomputeSessionAggregates")
     end

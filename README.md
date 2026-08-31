@@ -54,6 +54,7 @@ bin/dev                          # web + worker + file watcher
 bin/rails test                   # run the test suite
 bin/rails sessions:ingest        # one-shot manual sweep
 bin/rails sessions:reingest      # wipe + re-ingest everything
+bin/rails sessions:backfill_aggregates  # reprice + recompute cached session stats
 bin/rails sessions:backfill_pr_titles
 bin/rails sessions:backfill_repos
 ```

@@ -14,7 +14,7 @@ class SessionsController < ApplicationController
       )
     end
 
-    @sessions = @sessions.page(params[:page])
+    @sessions = @sessions.includes(:pr_links).page(params[:page])
     @projects = Session.base_project_paths
   end
 
@@ -26,8 +26,6 @@ class SessionsController < ApplicationController
       .filter_map(&:tool_result)
       .index_by(&:tool_use_id)
     @tool_usage = @session.tool_usage_summary
-    @total_input = @session.total_input_tokens
-    @total_output = @session.total_output_tokens
-    @duration_ms = @session.system_events.where(subtype: "turn_duration").sum(:duration_ms)
+    @cost_breakdown = Sessions::CostBreakdown.for_session(@session)
   end
 end

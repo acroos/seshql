@@ -27,16 +27,21 @@ class Session < ApplicationRecord
     total_input_tokens + total_output_tokens
   end
 
-  def human_prompt_count
-    messages.where(message_type: :user_prompt).count
+  # Input tokens that were neither written to nor read from the prompt cache —
+  # the genuinely new context Claude had to read at the full rate.
+  def fresh_input_tokens
+    total_input_tokens - total_cache_creation_tokens - total_cache_read_tokens
   end
 
   def turn_count
     messages.joins(:system_event).where(system_events: { subtype: "turn_duration" }).count
   end
 
-  def total_duration_ms
-    system_events.where(subtype: "turn_duration").sum(:duration_ms)
+  # Wall-clock span from the first to the last message. Much larger than
+  # active_duration_ms for sessions that were resumed hours or days later.
+  def span_ms
+    return nil unless created_at && ended_at
+    ((ended_at - created_at) * 1000).round
   end
 
   def tool_usage_summary

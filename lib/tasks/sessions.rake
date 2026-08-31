@@ -30,6 +30,29 @@ namespace :sessions do
     puts "Enqueued enrichment jobs."
   end
 
+  desc "Recompute per-turn costs and session aggregates from already-ingested data"
+  task backfill_aggregates: :environment do
+    total = AssistantMessage.count
+    puts "Recomputing cost for #{total} assistant messages..."
+    done = 0
+    unpriced = 0
+    AssistantMessage.find_in_batches(batch_size: 1_000) do |batch|
+      updates = batch.map do |am|
+        cost = am.computed_cost_usd
+        unpriced += 1 if cost.nil?
+        { message_uuid: am.message_uuid, cost_usd: cost }
+      end
+      AssistantMessage.upsert_all(updates, unique_by: :message_uuid, update_only: [ :cost_usd ])
+      done += batch.size
+      puts "  #{done}/#{total}"
+    end
+    puts "  #{unpriced} message(s) had no known model rate" if unpriced.positive?
+
+    puts "Recomputing aggregates for #{Session.count} sessions..."
+    Session.find_each { |s| Sessions::Ingester.recompute_aggregates(s.session_id) }
+    puts "Done."
+  end
+
   desc "Backfill repo associations for sessions missing one"
   task backfill_repos: :environment do
     sessions = Session.where(repo_id: nil).where.not(project_path: nil)

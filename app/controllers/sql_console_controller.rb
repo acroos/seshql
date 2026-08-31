@@ -9,10 +9,10 @@ class SqlConsoleController < ApplicationController
   ].freeze
 
   SCHEMA_REFERENCE = {
-    "sessions" => %w[session_id permission_mode custom_title agent_name last_prompt project_path worktree_config created_at updated_at],
+    "sessions" => %w[session_id permission_mode custom_title agent_name title first_prompt last_prompt project_path directory worktree branch worktree_config repo_id tools_used total_input_tokens total_output_tokens total_cache_creation_tokens total_cache_read_tokens total_cost_usd user_message_count assistant_message_count active_duration_ms pr_link_count files_edited_count git_commit_count created_at ended_at updated_at],
     "messages" => %w[uuid session_id parent_uuid message_type is_sidechain timestamp cwd git_branch version entrypoint slug user_type],
     "user_prompts" => %w[message_uuid content_text prompt_id permission_mode is_meta],
-    "assistant_messages" => %w[message_uuid model api_message_id request_id stop_reason input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens usage_details],
+    "assistant_messages" => %w[message_uuid model api_message_id request_id stop_reason input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens cost_usd usage_details],
     "content_blocks" => %w[id assistant_message_uuid position block_type text_content tool_use_id tool_name tool_input thinking_signature],
     "tool_results" => %w[message_uuid tool_use_id source_assistant_uuid result_type result_content],
     "system_events" => %w[message_uuid subtype duration_ms message_count hook_count prevented_continuation stop_reason has_output level is_meta hook_infos hook_errors],
@@ -33,6 +33,23 @@ class SqlConsoleController < ApplicationController
         WHERE cb.block_type = 'tool_use'
           AND cb.tool_name = 'Bash'
           AND (cb.tool_input::text ILIKE '%git%' OR cb.tool_input::text ILIKE '%gh %')
+      SQL
+    },
+    {
+      label: "Most expensive sessions",
+      sql: <<~SQL.strip
+        SELECT
+          s.title,
+          s.directory,
+          s.total_cost_usd,
+          s.user_message_count,
+          s.active_duration_ms / 60000 AS active_minutes,
+          s.files_edited_count,
+          s.pr_link_count
+        FROM sessions s
+        WHERE s.total_cost_usd IS NOT NULL
+        ORDER BY s.total_cost_usd DESC
+        LIMIT 20
       SQL
     },
     {

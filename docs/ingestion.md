@@ -27,6 +27,7 @@ that actually changed.
 ```bash
 bin/rails sessions:ingest        # run one sweep now (foreground)
 bin/rails sessions:reingest      # delete every session row, then sweep
+bin/rails sessions:backfill_aggregates  # recompute costs + cached stats in place
 ```
 
 Use `reingest` after schema changes or if you want to rebuild from scratch.
