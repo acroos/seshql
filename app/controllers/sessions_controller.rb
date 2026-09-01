@@ -7,7 +7,7 @@ class SessionsController < ApplicationController
     if params[:q].present?
       q = "%#{params[:q]}%"
       @sessions = @sessions.where(
-        "custom_title ILIKE :q OR last_prompt ILIKE :q OR session_id ILIKE :q",
+        "sessions.title ILIKE :q OR sessions.last_prompt ILIKE :q OR sessions.session_id ILIKE :q",
         q: q
       )
     end

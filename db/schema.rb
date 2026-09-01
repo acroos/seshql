@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_01_090000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_01_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -55,6 +55,89 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_01_090000) do
         ) s
         WHERE prog ~ '[A-Za-z]'
           AND prog NOT IN ('if','then','else','elif','fi','for','while','until','do','done','case','esac','in','end','function','select');
+      $function$
+  SQL
+
+  create_function :prompt_title, sql_definition: <<-'SQL'
+      CREATE OR REPLACE FUNCTION public.prompt_title(prompt text)
+       RETURNS text
+       LANGUAGE sql
+       IMMUTABLE PARALLEL SAFE
+      AS $function$
+        WITH stripped AS (
+          -- A system reminder is appended to whatever the operator typed. It is
+          -- never part of what they meant to say, so it never reaches the title.
+          SELECT btrim(regexp_replace(COALESCE(prompt, ''),
+                                      '<system-reminder>.*?</system-reminder>', ' ', 'gs')) AS body
+        ), parts AS (
+          SELECT
+            body,
+            -- The three command tags arrive in no fixed order -- `/ui-ux-pro-max`
+            -- leads with `<command-message>`, `/clear` with `<command-name>` -- so
+            -- each is matched on its own rather than as one anchored pattern.
+            btrim(COALESCE((regexp_match(body, '<command-name>\s*/?(.*?)</command-name>', 's'))[1], '')) AS command,
+            btrim(COALESCE((regexp_match(body, '<command-args>(.*?)</command-args>', 's'))[1], '')) AS args,
+            btrim(COALESCE((regexp_match(body, '<bash-input>(.*?)</bash-input>', 's'))[1], '')) AS shell
+          FROM stripped
+        )
+        SELECT NULLIF(btrim(regexp_replace(
+          CASE
+            WHEN body = '' THEN ''
+            -- Output, not input. Never a name.
+            WHEN body ~ '^<(local-command-(stdout|stderr|caveat)|bash-(stdout|stderr)|task-notification|user-prompt-submit-hook|ide_[a-z_]+)>'
+              THEN ''
+            -- `/skill some request` carries the request in its args; that is the
+            -- interesting half, but the command name says which lens it ran under.
+            WHEN body ~ '^<command-' AND command <> '' AND args <> ''
+              THEN '/' || command || ' — ' || args
+            WHEN body ~ '^<command-' AND command <> ''
+              THEN '/' || command
+            WHEN body ~ '^<bash-input>' AND shell <> ''
+              THEN '$ ' || shell
+            -- Prose, with newlines collapsed so a multi-line prompt still renders
+            -- as a single line.
+            ELSE body
+          END, '\s+', ' ', 'g')), '')
+        FROM parts;
+      $function$
+  SQL
+
+  create_function :prompt_title_rank, sql_definition: <<-'SQL'
+      CREATE OR REPLACE FUNCTION public.prompt_title_rank(prompt text)
+       RETURNS integer
+       LANGUAGE sql
+       IMMUTABLE PARALLEL SAFE
+      AS $function$
+        SELECT CASE
+          WHEN title IS NULL THEN 99  -- harness output; never a name
+          -- A stated request, whether typed plainly or handed to a slash command.
+          -- `/ui-ux-pro-max — redesign this leaderboard` says as much as prose does,
+          -- so it competes on time rather than losing to every later sentence.
+          WHEN title LIKE '/%' AND title LIKE '% — %' THEN 0
+          WHEN title NOT LIKE '/%' AND title NOT LIKE '$ %' AND char_length(title) >= 12 THEN 0
+          WHEN title NOT LIKE '/%' AND title NOT LIKE '$ %' THEN 1  -- "ok", "yes", "ship it"
+          WHEN title LIKE '$ %' THEN 2                              -- a ! shell command
+          ELSE 3                                                    -- bare /clear, /model, /login
+        END
+        FROM (SELECT prompt_title(prompt) AS title) t;
+      $function$
+  SQL
+
+  create_function :title_snippet, sql_definition: <<-'SQL'
+      CREATE OR REPLACE FUNCTION public.title_snippet(body text, max_length integer)
+       RETURNS text
+       LANGUAGE sql
+       IMMUTABLE PARALLEL SAFE
+      AS $function$
+        SELECT CASE
+          WHEN body IS NULL OR char_length(body) <= max_length THEN body
+          ELSE left(
+                 -- Drop back to the last whole word. A first word that already
+                 -- fills the budget has no boundary to find, so it is cut instead.
+                 COALESCE(NULLIF(regexp_replace(left(body, max_length + 1), '\s+\S*$', ''), ''), body),
+                 max_length
+               ) || '…'
+        END;
       $function$
   SQL
   # Custom types defined in this database.
@@ -225,7 +308,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_01_090000) do
     t.bigint "repo_id"
     t.enum "source", default: "claude_code", null: false, enum_type: "session_source"
     t.jsonb "source_metadata", default: {}, null: false
-    t.virtual "title", type: :text, as: "COALESCE(NULLIF((custom_title)::text, ''::text), \"left\"(NULLIF(first_prompt, ''::text), 80), \"left\"(NULLIF(last_prompt, ''::text), 80), (session_id)::text)", stored: true
+    t.virtual "title", type: :text, as: "COALESCE(NULLIF(btrim((custom_title)::text), ''::text), title_snippet(title_prompt, 90), title_snippet(prompt_title(last_prompt), 90), ('Session '::text || \"left\"((session_id)::text, 8)))", stored: true
+    t.text "title_prompt"
     t.string "tools_used", default: [], array: true
     t.bigint "total_cache_creation_tokens", default: 0, null: false
     t.bigint "total_cache_read_tokens", default: 0, null: false

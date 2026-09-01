@@ -104,9 +104,9 @@ matches the `user.` prefix instead of enumerating the injected kinds, and new
 ones classify correctly without a change here.
 
 Injected messages are still stored, marked `is_meta`, so nothing is lost and
-they stay queryable. They are excluded from `user_message_count` and
-`first_prompt`, and the session page renders them collapsed rather than as
-something you said. When a message mixes both, only the `user.*` entries
+they stay queryable. They are excluded from `user_message_count`,
+`first_prompt`, and the session title, and the session page renders them
+collapsed rather than as something you said. When a message mixes both, only the `user.*` entries
 become the prompt text.
 
 Rollouts predating the classification fall back to the role.

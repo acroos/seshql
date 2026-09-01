@@ -260,6 +260,56 @@ class Sessions::IngesterTest < ActiveSupport::TestCase
     end
   end
 
+  test "a session opened with a slash command is named after the real request" do
+    with_agent_homes do |homes|
+      lines = claude_lines
+      opener = {
+        "type" => "user", "uuid" => "aaaa1111-0000-0000-0000-0000000000ff",
+        "timestamp" => "2026-08-31T09:59:00.000Z", "cwd" => TranscriptFixtures::PROJECT_DIR,
+        "message" => { "content" => "<command-name>/clear</command-name>\n" \
+                                    "<command-message>clear</command-message>\n" \
+                                    "<command-args></command-args>" }
+      }
+      subagent = {
+        "type" => "user", "uuid" => "aaaa1111-0000-0000-0000-0000000000fe",
+        "timestamp" => "2026-08-31T09:59:30.000Z", "isSidechain" => true,
+        "cwd" => TranscriptFixtures::PROJECT_DIR,
+        "message" => { "content" => "search the repo for every call site" }
+      }
+      Sessions::Ingester.call(
+        write_claude_transcript(homes[:claude_home], [ opener, subagent ] + claude_lines)
+      )
+
+      session = Session.find(TranscriptFixtures::CLAUDE_SESSION_ID)
+      # `first_prompt` still means the first prompt, verbatim...
+      assert session.first_prompt.start_with?("<command-name>/clear</command-name>")
+      # ...but the name comes from the first prompt worth naming it after, and
+      # a subagent's prompt is not the session's subject.
+      assert_equal "check the repo state", session.title_prompt
+      assert_equal "check the repo state", session.title
+    end
+  end
+
+  test "a session with nothing said in it falls back to a short id" do
+    with_agent_homes do |homes|
+      lines = claude_lines.reject { |line| line["type"] == "user" }
+      Sessions::Ingester.call(write_claude_transcript(homes[:claude_home], lines))
+
+      session = Session.find(TranscriptFixtures::CLAUDE_SESSION_ID)
+      assert_nil session.title_prompt
+      assert_equal "Session #{TranscriptFixtures::CLAUDE_SESSION_ID[0, 8]}", session.title
+    end
+  end
+
+  test "an agent-set custom title outranks anything derived" do
+    with_agent_homes do |homes|
+      lines = claude_lines + [ { "type" => "custom-title", "customTitle" => "Repo triage" } ]
+      Sessions::Ingester.call(write_claude_transcript(homes[:claude_home], lines))
+
+      assert_equal "Repo triage", Session.find(TranscriptFixtures::CLAUDE_SESSION_ID).title
+    end
+  end
+
   test "a file under no known agent directory is reported as unsupported" do
     Dir.mktmpdir do |dir|
       path = File.join(dir, "somewhere.jsonl")
