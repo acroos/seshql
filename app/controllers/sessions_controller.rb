@@ -1,10 +1,8 @@
 class SessionsController < ApplicationController
   def index
     @sessions = Session.recent
-    if params[:project].present?
-      @sessions = @sessions.where("project_path = :p OR project_path LIKE :wt",
-        p: params[:project], wt: "#{params[:project]}--claude-worktrees-%")
-    end
+    @sessions = @sessions.in_directory(params[:project]) if params[:project].present?
+    @sessions = @sessions.where(source: params[:source]) if params[:source].present?
 
     if params[:q].present?
       q = "%#{params[:q]}%"
@@ -15,7 +13,9 @@ class SessionsController < ApplicationController
     end
 
     @sessions = @sessions.includes(:pr_links).page(params[:page])
-    @projects = Session.base_project_paths
+    @projects = Session.directories
+    # Only worth offering as a filter once more than one agent has been seen.
+    @sources = Session.distinct.pluck(:source).compact.sort
   end
 
   def show

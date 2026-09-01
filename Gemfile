@@ -43,6 +43,10 @@ gem "image_processing", "~> 1.2"
 # Watch ~/.claude/projects for new JSONL writes and auto-ingest.
 gem "listen"
 
+# Lets db/schema.rb carry the SQL functions the generated columns depend on,
+# so the schema can be loaded into an empty database.
+gem "fx"
+
 group :development, :test do
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
   gem "debug", platforms: %i[ mri windows ], require: "debug/prelude"

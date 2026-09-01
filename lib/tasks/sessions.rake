@@ -1,5 +1,5 @@
 namespace :sessions do
-  desc "Ingest all Claude Code session JSONL files from ~/.claude/projects"
+  desc "Ingest every agent session transcript found on this machine"
   task ingest: :environment do
     SessionsSweepJob.perform_now
   end
@@ -7,6 +7,7 @@ namespace :sessions do
   desc "Re-ingest all sessions (drops existing data first)"
   task reingest: :environment do
     puts "Clearing all session data..."
+    SessionFile.delete_all
     ContentBlock.delete_all
     AssistantMessage.delete_all
     UserPrompt.delete_all
@@ -53,9 +54,32 @@ namespace :sessions do
     puts "Done."
   end
 
+  desc "Re-apply each adapter's tool-name to tool-kind mapping to stored blocks"
+  task backfill_tool_kinds: :environment do
+    # `tool_kind` is written at ingest, so extending an adapter's mapping only
+    # affects new rows until this runs.
+    Sessions::Adapters.all.each do |adapter|
+      names = ContentBlock.joins(assistant_message: { message: :session })
+                          .where(sessions: { source: adapter.source })
+                          .distinct.pluck(:tool_name).compact
+
+      names.each do |name|
+        kind = adapter.tool_kind(name)
+        updated = ContentBlock.joins(assistant_message: { message: :session })
+                              .where(sessions: { source: adapter.source }, tool_name: name)
+                              # IS DISTINCT FROM, so rows whose kind is still
+                              # NULL are picked up like any other mismatch.
+                              .where("content_blocks.tool_kind IS DISTINCT FROM ?", kind)
+                              .update_all(tool_kind: kind)
+        puts "  #{adapter.label}: #{name} -> #{kind.inspect} (#{updated} rows)" if updated.positive?
+      end
+    end
+    puts "Done."
+  end
+
   desc "Backfill repo associations for sessions missing one"
   task backfill_repos: :environment do
-    sessions = Session.where(repo_id: nil).where.not(project_path: nil)
+    sessions = Session.where(repo_id: nil).where.not(directory: nil)
     puts "Found #{sessions.count} sessions without repo associations"
     sessions.find_each { |s| ResolveRepoJob.perform_later(s.session_id) }
     puts "Enqueued resolution jobs."

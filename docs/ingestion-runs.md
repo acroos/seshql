@@ -15,7 +15,8 @@ Each row is one run of `SessionsSweepJob` or `IngestSessionFileJob`:
 
 Failed runs include the exception message. Common causes:
 
-- Malformed JSONL (Claude Code wrote a partial line)
+- Malformed JSONL (an agent was caught mid-write on a partial line)
+- A compressed Codex rollout when the `zstd` binary isn't installed
 - Schema mismatches after a migration you haven't applied
 - A linked PR's `gh pr view` call timing out (these run as separate jobs but
   surface as enrichment failures on the affected `pr_links`)

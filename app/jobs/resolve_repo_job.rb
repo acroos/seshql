@@ -6,7 +6,7 @@ class ResolveRepoJob < ApplicationJob
     session = Session.find(session_id)
     return if session.repo_id.present?
 
-    repo = Sessions::RepoResolver.call(session.project_path)
+    repo = Sessions::RepoResolver.call(session.directory)
     session.update!(repo_id: repo.id) if repo
   end
 end

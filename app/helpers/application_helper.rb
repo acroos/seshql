@@ -57,14 +57,28 @@ module ApplicationHelper
   end
 
   def format_project(path)
-    return "unknown" unless path
-    path.gsub(/^-/, "").gsub("-", "/")
+    path.presence || "unknown"
   end
 
+  # Working directories are absolute, and only the tail is worth the space.
   def short_project(path)
-    full = format_project(path)
-    parts = full.split("/")
-    parts.last(2).join("/")
+    format_project(path).split("/").last(2).join("/")
+  end
+
+  PRICING_DOCS = {
+    "claude_code" => "https://platform.claude.com/docs/en/about-claude/pricing",
+    "codex" => "https://developers.openai.com/api/docs/pricing"
+  }.freeze
+
+  def pricing_docs_url(source)
+    PRICING_DOCS[source.to_s] || PRICING_DOCS["claude_code"]
+  end
+
+  # A one-line hint at what a block of injected context is, taken from its
+  # first meaningful line: "<skills_instructions>", "# AGENTS.md ...", and so on.
+  def context_summary(text)
+    line = text.to_s.lines.find { |candidate| candidate.strip.present? }
+    line.to_s.strip.delete_prefix("#").strip.truncate(70)
   end
 
   def time_ago_short(time)

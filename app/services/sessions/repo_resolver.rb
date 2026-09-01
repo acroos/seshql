@@ -1,52 +1,54 @@
 require "open3"
 
 module Sessions
+  # Maps a session's working directory to a `repos` row by asking git what
+  # remote lives there. Directories that are not repositories, or that no
+  # longer exist, resolve to nil rather than raising.
   class RepoResolver
-    def self.call(project_path, path_lookup: nil)
-      new(project_path, path_lookup: path_lookup).call
-    end
+    # A worktree checkout belongs to the repository it was cut from, not to a
+    # repo of its own, so the worktree segment is trimmed first.
+    WORKTREE_PATHS = [ %r{/\.claude/worktrees/.*\z}, %r{/\.codex/worktrees/.*\z} ].freeze
 
-    def initialize(project_path, path_lookup: nil)
-      @project_path = project_path
-      @path_lookup = path_lookup
+    def self.call(directory) = new(directory).call
+
+    def initialize(directory)
+      @directory = directory
     end
 
     def call
-      return nil unless @project_path.present?
+      path = base_directory
+      return nil unless path && Dir.exist?(path) && git_repo?(path)
 
-      lookup = @path_lookup || PathLookup.build
-      base_path = @project_path.sub(/--claude-worktrees-.*$/, "")
-      fs_path = lookup[base_path]
-
-      if fs_path && fs_path.include?("/.claude/worktrees/")
-        fs_path = fs_path.sub(%r{/\.claude/worktrees/.*$}, "")
-      end
-
-      return nil unless fs_path && Dir.exist?(fs_path)
-      return nil unless git_repo?(fs_path)
-
-      remote_url = git_remote_url(fs_path)
-
-      if remote_url
-        owner_repo = parse_owner_repo(remote_url)
-        return nil unless owner_repo
-
-        Repo.find_or_create_by!(name: owner_repo) do |r|
-          r.remote_url = remote_url
-          r.filesystem_path = fs_path
-        end
-      else
-        dir_name = File.basename(fs_path)
-        Repo.find_or_create_by!(name: "local/#{dir_name}") do |r|
-          r.filesystem_path = fs_path
-        end
-      end
+      remote_url = git_remote_url(path)
+      remote_url ? repo_from_remote(remote_url, path) : repo_from_directory(path)
     rescue => e
-      Rails.logger.warn("Could not resolve repo for #{@project_path}: #{e.message}")
+      Rails.logger.warn("Could not resolve repo for #{@directory}: #{e.message}")
       nil
     end
 
     private
+
+    def base_directory
+      return nil if @directory.blank?
+
+      WORKTREE_PATHS.reduce(@directory) { |path, pattern| path.sub(pattern, "") }
+    end
+
+    def repo_from_remote(remote_url, path)
+      owner_repo = parse_owner_repo(remote_url)
+      return nil unless owner_repo
+
+      Repo.find_or_create_by!(name: owner_repo) do |repo|
+        repo.remote_url = remote_url
+        repo.filesystem_path = path
+      end
+    end
+
+    def repo_from_directory(path)
+      Repo.find_or_create_by!(name: "local/#{File.basename(path)}") do |repo|
+        repo.filesystem_path = path
+      end
+    end
 
     def git_repo?(path)
       _, status = Open3.capture2("git", "-C", path, "rev-parse", "--git-dir")
@@ -66,16 +68,13 @@ module Sessions
       return nil unless first_remote
 
       output, status = Open3.capture2("git", "-C", path, "remote", "get-url", first_remote)
-      return output.strip.presence if status.success?
-      nil
+      status.success? ? output.strip.presence : nil
     rescue
       nil
     end
 
     def parse_owner_repo(remote_url)
-      if remote_url =~ %r{[:/]([^/]+)/([^/]+?)(?:\.git)?$}
-        "#{$1}/#{$2}"
-      end
+      "#{$1}/#{$2}" if remote_url =~ %r{[:/]([^/]+)/([^/]+?)(?:\.git)?\z}
     end
   end
 end

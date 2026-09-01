@@ -14,16 +14,32 @@
       <% if params[:project].present? %>
         <input type="hidden" name="project" value="<%= params[:project] %>">
       <% end %>
+      <% if params[:source].present? %>
+        <input type="hidden" name="source" value="<%= params[:source] %>">
+      <% end %>
       <button type="submit" class="bg-accent hover:bg-accent-dim text-white text-sm px-4 py-2 rounded-lg transition">Search</button>
     <% end %>
   </div>
 
+  <!-- Agent filter pills -->
+  <% if @sources.many? %>
+    <div class="flex flex-wrap gap-1.5 mb-3">
+      <%= link_to "All agents", sessions_path(project: params[:project], q: params[:q]),
+          class: "px-2.5 py-1 rounded-full text-xs transition #{params[:source].blank? ? 'bg-accent text-white' : 'bg-surface border border-border text-gray-400 hover:text-white hover:border-border-light'}" %>
+      <% @sources.each do |source| %>
+        <%= link_to Sessions::Adapters.for_source(source)&.label || source,
+            sessions_path(source: source, project: params[:project], q: params[:q]),
+            class: "px-2.5 py-1 rounded-full text-xs transition #{params[:source] == source ? 'bg-accent text-white' : 'bg-surface border border-border text-gray-400 hover:text-white hover:border-border-light'}" %>
+      <% end %>
+    </div>
+  <% end %>
+
   <!-- Project filter pills -->
   <div class="flex flex-wrap gap-1.5 mb-4">
-    <%= link_to "All", sessions_path(q: params[:q]),
+    <%= link_to "All", sessions_path(q: params[:q], source: params[:source]),
         class: "px-2.5 py-1 rounded-full text-xs transition #{params[:project].blank? ? 'bg-accent text-white' : 'bg-surface border border-border text-gray-400 hover:text-white hover:border-border-light'}" %>
     <% @projects.each do |project| %>
-      <%= link_to short_project(project), sessions_path(project: project, q: params[:q]),
+      <%= link_to short_project(project), sessions_path(project: project, q: params[:q], source: params[:source]),
           class: "px-2.5 py-1 rounded-full text-xs font-mono transition #{params[:project] == project ? 'bg-accent text-white' : 'bg-surface border border-border text-gray-400 hover:text-white hover:border-border-light'}" %>
     <% end %>
   </div>
@@ -37,7 +53,8 @@
         <div class="min-w-0">
           <div class="text-sm text-gray-200 group-hover:text-white truncate"><%= session.title %></div>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500">
-            <span class="font-mono"><%= short_project(session.base_project_path) %></span>
+            <span class="font-mono"><%= short_project(session.directory) %></span>
+            <span class="px-1.5 py-0.5 rounded bg-white/5 text-gray-400 text-[11px]"><%= session.agent_label %></span>
             <% if session.branch.present? %>
               <span class="font-mono text-gray-600"><%= session.branch %></span>
             <% end %>
@@ -63,7 +80,7 @@
 
       <!-- Stat strip: how long, how much talking, how many tokens, what came out -->
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-[11px] text-gray-600">
-        <span title="Time Claude spent working, and the wall-clock span from first to last message">
+        <span title="Time the agent spent working, and the wall-clock span from first to last message">
           <% if session.active_duration_ms.positive? %>
             <span class="text-gray-400"><%= format_duration(session.active_duration_ms) %></span> active
             <span class="text-gray-700 mx-0.5">·</span>
@@ -71,7 +88,7 @@
           <span class="text-gray-400"><%= format_duration(session.span_ms) %></span> span
         </span>
 
-        <span title="Prompts you sent, and turns Claude took">
+        <span title="Prompts you sent, and turns the agent took">
           <span class="text-gray-400"><%= session.user_message_count %></span>
           <%= "prompt".pluralize(session.user_message_count) %>
           <span class="text-gray-700 mx-0.5">·</span>

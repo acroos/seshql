@@ -2,20 +2,20 @@
 require_relative "../config/environment"
 require "listen"
 
-dir = File.expand_path("~/.claude/projects")
-abort "[watch] no projects dir at #{dir}" unless Dir.exist?(dir)
+roots = Sessions::Adapters.enabled.flat_map(&:existing_roots).uniq
+abort "[watch] no agent session directories found" if roots.empty?
 
-listener = Listen.to(dir, only: /\.jsonl$/, wait_for_delay: 0.5) do |modified, added, _removed|
+# Codex compresses older rollouts, so both extensions have to be watched.
+listener = Listen.to(*roots, only: /\.jsonl(\.zst)?$/, wait_for_delay: 0.5) do |modified, added, _removed|
   paths = (modified + added).uniq
   next if paths.empty?
+
   Rails.application.executor.wrap do
-    paths.each do |path|
-      IngestSessionFileJob.perform_later(path)
-    end
+    paths.each { |path| IngestSessionFileJob.perform_later(path) }
   end
   Rails.logger.info("[watch] enqueued #{paths.size}")
 end
 
 listener.start
-puts "[watch] watching #{dir}"
+puts "[watch] watching #{roots.join(', ')}"
 sleep

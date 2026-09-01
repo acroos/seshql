@@ -9,21 +9,22 @@ class SqlConsoleController < ApplicationController
   ].freeze
 
   SCHEMA_REFERENCE = {
-    "sessions" => %w[session_id permission_mode custom_title agent_name title first_prompt last_prompt project_path directory worktree branch worktree_config repo_id tools_used total_input_tokens total_output_tokens total_cache_creation_tokens total_cache_read_tokens total_cost_usd user_message_count assistant_message_count active_duration_ms pr_link_count files_edited_count git_commit_count created_at ended_at updated_at],
+    "sessions" => %w[session_id source source_metadata permission_mode custom_title agent_name title first_prompt last_prompt project_path directory worktree branch worktree_config repo_id tools_used total_input_tokens total_output_tokens total_cache_creation_tokens total_cache_read_tokens total_cost_usd user_message_count assistant_message_count active_duration_ms pr_link_count files_edited_count git_commit_count created_at ended_at updated_at],
     "messages" => %w[uuid session_id parent_uuid message_type is_sidechain timestamp cwd git_branch version entrypoint slug user_type],
     "user_prompts" => %w[message_uuid content_text prompt_id permission_mode is_meta],
     "assistant_messages" => %w[message_uuid model api_message_id request_id stop_reason input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens cost_usd usage_details],
-    "content_blocks" => %w[id assistant_message_uuid position block_type text_content tool_use_id tool_name tool_input thinking_signature],
+    "content_blocks" => %w[id assistant_message_uuid position block_type text_content tool_use_id tool_name tool_kind tool_input bash_command bash_programs thinking_signature],
     "tool_results" => %w[message_uuid tool_use_id source_assistant_uuid result_type result_content],
     "system_events" => %w[message_uuid subtype duration_ms message_count hook_count prevented_continuation stop_reason has_output level is_meta hook_infos hook_errors],
     "pr_links" => %w[id session_id pr_number pr_url pr_repository linked_at],
     "file_history_snapshots" => %w[id session_id source_message_id is_snapshot_update tracked_files snapshot_timestamp],
-    "attachments" => %w[message_uuid attachment_type attachment_data]
+    "attachments" => %w[message_uuid attachment_type attachment_data],
+    "session_files" => %w[id file_path session_id source file_mtime file_size last_byte_offset last_ingested_at]
   }.freeze
 
   EXAMPLE_QUERIES = [
     {
-      label: "Bash tool calls containing 'git' or 'gh'",
+      label: "Shell commands containing 'git' or 'gh'",
       sql: <<~SQL.strip
         SELECT
           COUNT(*) AS call_count,
@@ -31,8 +32,8 @@ class SqlConsoleController < ApplicationController
         FROM content_blocks cb
         JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
         WHERE cb.block_type = 'tool_use'
-          AND cb.tool_name = 'Bash'
-          AND (cb.tool_input::text ILIKE '%git%' OR cb.tool_input::text ILIKE '%gh %')
+          AND cb.tool_kind = 'shell'
+          AND (cb.bash_command ILIKE '%git%' OR cb.bash_command ILIKE '%gh %')
       SQL
     },
     {
@@ -130,12 +131,12 @@ class SqlConsoleController < ApplicationController
       SQL
     },
     {
-      label: "Token cost by bash command (top 20)",
+      label: "Token cost by shell command (top 20)",
       sql: <<~SQL.strip
         WITH top_cmds AS (
-          SELECT SPLIT_PART(cb.tool_input->>'command', ' ', 1) AS cmd
+          SELECT SPLIT_PART(cb.bash_command, ' ', 1) AS cmd
           FROM content_blocks cb
-          WHERE cb.block_type = 'tool_use' AND cb.tool_name = 'Bash'
+          WHERE cb.block_type = 'tool_use' AND cb.tool_kind = 'shell'
           GROUP BY cmd
           ORDER BY COUNT(*) DESC
           LIMIT 20
@@ -145,8 +146,8 @@ class SqlConsoleController < ApplicationController
           COUNT(*) AS call_count,
           COALESCE(SUM(am.input_tokens + am.output_tokens + am.cache_creation_input_tokens + am.cache_read_input_tokens), 0) AS total_tokens
         FROM top_cmds tc
-        JOIN content_blocks cb ON SPLIT_PART(cb.tool_input->>'command', ' ', 1) = tc.cmd
-          AND cb.block_type = 'tool_use' AND cb.tool_name = 'Bash'
+        JOIN content_blocks cb ON SPLIT_PART(cb.bash_command, ' ', 1) = tc.cmd
+          AND cb.block_type = 'tool_use' AND cb.tool_kind = 'shell'
         JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
         GROUP BY tc.cmd
         ORDER BY total_tokens DESC
@@ -157,7 +158,7 @@ class SqlConsoleController < ApplicationController
       sql: <<~SQL.strip
         SELECT
           REGEXP_REPLACE(
-            REGEXP_REPLACE(cb.tool_input->>'file_path', '/.claude/worktrees/[^/]+/', '/'),
+            REGEXP_REPLACE(cb.tool_input->>'file_path', '/\.(claude|codex)/worktrees/[^/]+/', '/'),
             '^/Users/[^/]+/(dev/)?', ''
           ) AS file_path,
           COALESCE(s.custom_title, LEFT(s.last_prompt, 40)) AS session,
@@ -167,7 +168,7 @@ class SqlConsoleController < ApplicationController
         JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
         JOIN messages m ON m.uuid = am.message_uuid
         JOIN sessions s ON s.session_id = m.session_id
-        WHERE cb.block_type = 'tool_use' AND cb.tool_name = 'Read'
+        WHERE cb.block_type = 'tool_use' AND cb.tool_kind = 'read'
         GROUP BY file_path, s.session_id, s.custom_title, s.last_prompt
         HAVING COUNT(*) >= 3
         ORDER BY reads_in_session DESC
@@ -187,7 +188,7 @@ class SqlConsoleController < ApplicationController
           ROUND(COALESCE(AVG(am.input_tokens + am.output_tokens + am.cache_creation_input_tokens + am.cache_read_input_tokens), 0)) AS avg_tokens_per_read
         FROM content_blocks cb
         JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
-        WHERE cb.block_type = 'tool_use' AND cb.tool_name = 'Read'
+        WHERE cb.block_type = 'tool_use' AND cb.tool_kind = 'read'
         GROUP BY read_type
         ORDER BY total_tokens DESC
       SQL
@@ -200,7 +201,7 @@ class SqlConsoleController < ApplicationController
             cb.assistant_message_uuid,
             REVERSE(SPLIT_PART(REVERSE(cb.tool_input->>'file_path'), '/', 1)) AS basename
           FROM content_blocks cb
-          WHERE cb.block_type = 'tool_use' AND cb.tool_name = 'Read'
+          WHERE cb.block_type = 'tool_use' AND cb.tool_kind = 'read'
         )
         SELECT
           CASE
@@ -236,8 +237,8 @@ class SqlConsoleController < ApplicationController
           FROM messages m
           JOIN assistant_messages am ON am.message_uuid = m.uuid
           JOIN content_blocks cb ON cb.assistant_message_uuid = am.message_uuid
-          WHERE cb.tool_name = 'Bash'
-            AND SPLIT_PART(cb.tool_input->>'command', ' ', 1) IN ('git', 'gh')
+          WHERE cb.tool_kind = 'shell'
+            AND SPLIT_PART(cb.bash_command, ' ', 1) IN ('git', 'gh')
           GROUP BY m.session_id
         )
         SELECT

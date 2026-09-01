@@ -10,14 +10,58 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_30_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_01_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
+
+  create_function :shell_command, sql_definition: <<-'SQL'
+      CREATE OR REPLACE FUNCTION public.shell_command(input jsonb)
+       RETURNS text
+       LANGUAGE sql
+       IMMUTABLE PARALLEL SAFE
+      AS $function$
+        SELECT CASE jsonb_typeof(input->'command')
+          WHEN 'string' THEN input->>'command'
+          WHEN 'array' THEN
+            CASE
+              WHEN jsonb_array_length(input->'command') = 3
+               AND (input->'command'->>0) ~ '(^|/)(ba|z|k|da)?sh$'
+               AND (input->'command'->>1) ~ '^-[a-z]*c[a-z]*$'
+              THEN input->'command'->>2
+              ELSE (
+                SELECT string_agg(value, ' ' ORDER BY ordinality)
+                FROM jsonb_array_elements_text(input->'command')
+                  WITH ORDINALITY AS t(value, ordinality)
+              )
+            END
+        END;
+      $function$
+  SQL
+
+  create_function :bash_programs, sql_definition: <<-'SQL'
+      CREATE OR REPLACE FUNCTION public.bash_programs(cmd text)
+       RETURNS text[]
+       LANGUAGE sql
+       IMMUTABLE PARALLEL SAFE
+      AS $function$
+        SELECT array_agg(prog)
+        FROM (
+          SELECT (regexp_match(
+            segment,
+            '^\s*(?:\w+=\S+\s+)*([\w./-]+)'
+          ))[1] AS prog
+          FROM regexp_split_to_table(cmd, '\s*(?:&&|\|\||;|\|)\s*') AS segment
+        ) s
+        WHERE prog ~ '[A-Za-z]'
+          AND prog NOT IN ('if','then','else','elif','fi','for','while','until','do','done','case','esac','in','end','function','select');
+      $function$
+  SQL
   # Custom types defined in this database.
   # Note that some types may not work with other database engines. Be careful if changing database.
   create_enum "block_type", ["thinking", "text", "tool_use"]
   create_enum "message_type", ["user_prompt", "tool_result", "assistant", "system", "attachment"]
+  create_enum "session_source", ["claude_code", "codex"]
 
   create_table "assistant_messages", primary_key: "message_uuid", id: :uuid, default: nil, force: :cascade do |t|
     t.string "api_message_id"
@@ -42,19 +86,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_30_120000) do
 
   create_table "content_blocks", force: :cascade do |t|
     t.uuid "assistant_message_uuid", null: false
-    t.virtual "bash_command", type: :text, as: "\nCASE\n    WHEN ((tool_name)::text = 'Bash'::text) THEN (tool_input ->> 'command'::text)\n    ELSE NULL::text\nEND", stored: true
-    t.virtual "bash_programs", type: :text, array: true, as: "\nCASE\n    WHEN ((tool_name)::text = 'Bash'::text) THEN bash_programs((tool_input ->> 'command'::text))\n    ELSE NULL::text[]\nEND", stored: true
+    t.virtual "bash_command", type: :text, as: "\nCASE\n    WHEN ((tool_kind)::text = 'shell'::text) THEN shell_command(tool_input)\n    ELSE NULL::text\nEND", stored: true
+    t.virtual "bash_programs", type: :text, array: true, as: "\nCASE\n    WHEN ((tool_kind)::text = 'shell'::text) THEN bash_programs(shell_command(tool_input))\n    ELSE NULL::text[]\nEND", stored: true
     t.enum "block_type", null: false, enum_type: "block_type"
     t.integer "position", null: false
     t.text "text_content"
     t.text "thinking_signature"
     t.jsonb "tool_input", default: {}
+    t.string "tool_kind"
     t.string "tool_name"
     t.string "tool_use_id"
     t.index ["assistant_message_uuid", "position"], name: "uniq_content_blocks_on_assistant_position", unique: true
     t.index ["assistant_message_uuid"], name: "index_content_blocks_on_assistant_message_uuid"
     t.index ["bash_programs"], name: "index_content_blocks_on_bash_programs", using: :gin
     t.index ["block_type"], name: "index_content_blocks_on_block_type"
+    t.index ["tool_kind"], name: "index_content_blocks_on_tool_kind"
     t.index ["tool_name"], name: "index_content_blocks_on_tool_name"
   end
 
@@ -145,6 +191,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_30_120000) do
     t.index ["name"], name: "index_repos_on_name", unique: true
   end
 
+  create_table "session_files", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.datetime "file_mtime"
+    t.string "file_path", null: false
+    t.bigint "file_size"
+    t.bigint "last_byte_offset", default: 0, null: false
+    t.datetime "last_ingested_at"
+    t.string "session_id", null: false
+    t.enum "source", null: false, enum_type: "session_source"
+    t.datetime "updated_at", null: false
+    t.index ["file_mtime"], name: "index_session_files_on_file_mtime"
+    t.index ["file_path"], name: "index_session_files_on_file_path", unique: true
+    t.index ["session_id"], name: "index_session_files_on_session_id"
+  end
+
   create_table "sessions", primary_key: "session_id", id: :string, force: :cascade do |t|
     t.bigint "active_duration_ms", default: 0, null: false
     t.string "agent_name"
@@ -152,20 +213,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_30_120000) do
     t.string "branch"
     t.datetime "created_at", null: false
     t.string "custom_title"
-    t.virtual "directory", type: :text, as: "NULLIF(replace(regexp_replace(regexp_replace((project_path)::text, '--claude-worktrees-.*$'::text, ''::text), '^-'::text, ''::text), '-'::text, '/'::text), ''::text)", stored: true
+    t.text "directory"
     t.datetime "ended_at"
-    t.datetime "file_mtime"
-    t.bigint "file_size"
     t.integer "files_edited_count", default: 0, null: false
     t.text "first_prompt"
     t.integer "git_commit_count", default: 0, null: false
-    t.bigint "last_byte_offset", default: 0, null: false
-    t.datetime "last_ingested_at"
     t.text "last_prompt"
     t.string "permission_mode"
     t.integer "pr_link_count", default: 0, null: false
     t.string "project_path"
     t.bigint "repo_id"
+    t.enum "source", default: "claude_code", null: false, enum_type: "session_source"
+    t.jsonb "source_metadata", default: {}, null: false
     t.virtual "title", type: :text, as: "COALESCE(NULLIF((custom_title)::text, ''::text), \"left\"(NULLIF(first_prompt, ''::text), 80), \"left\"(NULLIF(last_prompt, ''::text), 80), (session_id)::text)", stored: true
     t.string "tools_used", default: [], array: true
     t.bigint "total_cache_creation_tokens", default: 0, null: false
@@ -175,14 +234,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_30_120000) do
     t.bigint "total_output_tokens", default: 0, null: false
     t.datetime "updated_at", null: false
     t.integer "user_message_count", default: 0, null: false
-    t.virtual "worktree", type: :text, as: "NULLIF(split_part((project_path)::text, '--claude-worktrees-'::text, 2), ''::text)", stored: true
+    t.text "worktree"
     t.jsonb "worktree_config", default: {}
     t.index ["active_duration_ms"], name: "index_sessions_on_active_duration_ms"
     t.index ["created_at"], name: "index_sessions_on_created_at"
+    t.index ["directory"], name: "index_sessions_on_directory"
     t.index ["ended_at"], name: "index_sessions_on_ended_at"
-    t.index ["file_mtime"], name: "index_sessions_on_file_mtime"
     t.index ["project_path"], name: "index_sessions_on_project_path"
     t.index ["repo_id"], name: "index_sessions_on_repo_id"
+    t.index ["source"], name: "index_sessions_on_source"
     t.index ["tools_used"], name: "index_sessions_on_tools_used", using: :gin
     t.index ["total_cost_usd"], name: "index_sessions_on_total_cost_usd"
     t.index ["worktree"], name: "index_sessions_on_worktree"
@@ -227,6 +287,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_30_120000) do
   add_foreign_key "file_history_snapshots", "sessions", primary_key: "session_id"
   add_foreign_key "messages", "sessions", primary_key: "session_id"
   add_foreign_key "pr_links", "sessions", primary_key: "session_id"
+  add_foreign_key "session_files", "sessions", primary_key: "session_id", on_delete: :cascade
   add_foreign_key "sessions", "repos"
   add_foreign_key "system_events", "messages", column: "message_uuid", primary_key: "uuid"
   add_foreign_key "tool_results", "messages", column: "message_uuid", primary_key: "uuid"

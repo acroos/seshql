@@ -1,24 +1,22 @@
+# Walks every agent's session directory and enqueues anything that changed
+# since it was last ingested.
 class SessionsSweepJob < ApplicationJob
   queue_as :ingest
 
-  PROJECTS_DIR = File.expand_path("~/.claude/projects").freeze
-
   def perform
-    return unless Dir.exist?(PROJECTS_DIR)
-
-    paths = Dir.glob(File.join(PROJECTS_DIR, "**", "*.jsonl"))
+    paths = Sessions::Adapters.discover
     return if paths.empty?
 
-    session_ids = paths.map { |p| File.basename(p, ".jsonl") }
-    watermarks = Session.where(session_id: session_ids).pluck(:session_id, :file_mtime, :file_size).to_h { |id, m, s| [ id, [ m, s ] ] }
+    watermarks = SessionFile.where(file_path: paths)
+                            .pluck(:file_path, :file_mtime, :file_size)
+                            .to_h { |path, mtime, size| [ path, [ mtime, size ] ] }
 
     enqueued = 0
     skipped = 0
 
     paths.each do |path|
       stat = File.stat(path)
-      session_id = File.basename(path, ".jsonl")
-      mtime, size = watermarks[session_id]
+      mtime, size = watermarks[path]
 
       if mtime && size == stat.size && mtime.to_i == stat.mtime.to_i
         skipped += 1
@@ -30,6 +28,7 @@ class SessionsSweepJob < ApplicationJob
       next
     end
 
-    Rails.logger.info("[sweep] enqueued=#{enqueued} skipped=#{skipped} of #{paths.size}")
+    Rails.logger.info("[sweep] enqueued=#{enqueued} skipped=#{skipped} of #{paths.size} " \
+                      "across #{Sessions::Adapters.enabled.map(&:label).join(', ')}")
   end
 end

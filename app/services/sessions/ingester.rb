@@ -1,16 +1,44 @@
 module Sessions
+  # Reads one transcript file and upserts it into the schema.
+  #
+  # Everything agent-specific lives behind `Sessions::Adapters`; this class
+  # only decides which adapter owns a file, whether that file has changed since
+  # it was last read, and how the normalized rows get written.
   class Ingester
-    PROJECTS_DIR = File.expand_path("~/.claude/projects").freeze
-
     Result = Struct.new(:status, :lines_processed, :error, keyword_init: true)
 
-    def self.call(file_path, path_lookup: nil)
-      new(file_path, path_lookup: path_lookup).call
+    # Which column makes a row unique, so a re-read updates rather than
+    # duplicates. Keyed by the `ParsedTranscript` collection it applies to.
+    UPSERT_KEYS = {
+      messages: [ Message, :uuid ],
+      user_prompts: [ UserPrompt, :message_uuid ],
+      tool_results: [ ToolResult, :message_uuid ],
+      assistant_messages: [ AssistantMessage, :message_uuid ],
+      content_blocks: [ ContentBlock, "uniq_content_blocks_on_assistant_position" ],
+      system_events: [ SystemEvent, :message_uuid ],
+      attachments: [ Attachment, :message_uuid ],
+      pr_links: [ PrLink, "uniq_pr_links_on_session_repo_number" ],
+      file_history_snapshots: [ FileHistorySnapshot, "uniq_file_history_on_session_source" ]
+    }.freeze
+
+    # The unique key each collection dedupes on before it reaches Postgres,
+    # which rejects a statement that touches the same row twice.
+    DEDUPE_KEYS = {
+      messages: ->(row) { row[:uuid] },
+      content_blocks: ->(row) { [ row[:assistant_message_uuid], row[:position] ] },
+      pr_links: ->(row) { [ row[:session_id], row[:pr_repository], row[:pr_number] ] },
+      file_history_snapshots: ->(row) { [ row[:session_id], row[:source_message_id] ] }
+    }.freeze
+    DEFAULT_DEDUPE_KEY = ->(row) { row[:message_uuid] }
+
+    NUL = "\u0000".freeze
+
+    def self.call(file_path)
+      new(file_path).call
     end
 
-    def initialize(file_path, path_lookup: nil)
-      @file_path = file_path
-      @path_lookup = path_lookup
+    def initialize(file_path)
+      @file_path = File.expand_path(file_path)
     end
 
     def call
@@ -25,26 +53,157 @@ module Sessions
 
     private
 
+    attr_reader :file_path
+
     def run
-      return Result.new(status: :missing, lines_processed: 0) unless File.exist?(@file_path)
+      return Result.new(status: :missing, lines_processed: 0) unless File.exist?(file_path)
 
-      stat = File.stat(@file_path)
-      session_id = File.basename(@file_path, ".jsonl")
-      project_path = PathLookup.derive_project_path(@file_path, PROJECTS_DIR)
+      adapter = Adapters.for_path(file_path)
+      session_id = adapter&.session_id_for(file_path)
+      return Result.new(status: :unsupported, lines_processed: 0) if session_id.blank?
 
+      stat = File.stat(file_path)
+      tracked = SessionFile.find_or_initialize_by(file_path: file_path)
+      return Result.new(status: :skipped, lines_processed: 0) if up_to_date?(tracked, stat)
+
+      offset = read_offset(adapter, tracked, stat)
+      records = read_records(adapter, offset)
+
+      count = persist(adapter, session_id, records, tracked, stat)
+      Result.new(status: :succeeded, lines_processed: count)
+    end
+
+    def up_to_date?(tracked, stat)
+      tracked.persisted? &&
+        tracked.file_mtime.present? &&
+        tracked.file_size == stat.size &&
+        tracked.file_mtime.to_i == stat.mtime.to_i
+    end
+
+    # A file is resumed from where the last read stopped, unless the adapter
+    # says its format cannot be read in pieces, or the file has been rewritten
+    # shorter than the offset we hold.
+    def read_offset(adapter, tracked, stat)
+      return 0 unless tracked.persisted? && adapter.resumable?(file_path)
+
+      offset = tracked.last_byte_offset.to_i
+      offset > stat.size ? 0 : offset
+    end
+
+    def read_records(adapter, offset)
+      records = []
+      adapter.each_record(file_path, offset: offset) { |record| records << record }
+      records
+    end
+
+    def persist(adapter, session_id, records, tracked, stat)
       session = Session.find_or_initialize_by(session_id: session_id)
-      session.project_path ||= project_path
+      session.source = adapter.source
+      newly_created = session.new_record?
 
-      if up_to_date?(session, stat)
-        return Result.new(status: :skipped, lines_processed: 0)
+      # A resumed read that found nothing new still needs its watermark moved
+      # forward so the file stops being re-enqueued.
+      if records.empty? && !newly_created
+        touch_watermark(tracked, session_id, adapter, stat)
+        return 0
       end
 
-      offset = session.persisted? ? session.last_byte_offset.to_i : 0
-      offset = 0 if offset > stat.size
+      parsed = adapter.parse(records, session_id: session_id, file_path: file_path)
+      new_pr_link_keys = []
 
-      lines_processed = parse_and_persist(session, offset, stat)
+      ActiveRecord::Base.transaction do
+        apply_session_attributes(session, parsed.session_attrs)
+        session.save! if session.new_record? || session.changed?
 
-      Result.new(status: :succeeded, lines_processed: lines_processed)
+        new_pr_link_keys = write_rows(parsed)
+        self.class.recompute_aggregates(session_id)
+
+        session.update!(created_at: earliest_message_timestamp(session_id) || session.created_at || Time.current)
+        touch_watermark(tracked, session_id, adapter, stat)
+      end
+
+      enqueue_enrichment(session, newly_created, new_pr_link_keys)
+      records.size
+    end
+
+    # An adapter only reports what the file told it, so a nil never clears a
+    # value an earlier file or an earlier read already established.
+    def apply_session_attributes(session, attrs)
+      attrs.each do |column, value|
+        next if value.nil?
+        session[column] = value
+      end
+    end
+
+    def touch_watermark(tracked, session_id, adapter, stat)
+      tracked.update!(
+        session_id: session_id,
+        source: adapter.source,
+        file_mtime: stat.mtime,
+        file_size: stat.size,
+        last_byte_offset: stat.size,
+        last_ingested_at: Time.current
+      )
+    end
+
+    def write_rows(parsed)
+      ParsedTranscript::TABLES.each do |table|
+        rows = dedupe(parsed.public_send(table), table)
+        next if rows.empty?
+
+        model, unique_by = UPSERT_KEYS.fetch(table)
+        model.upsert_all(scrub(square_off(rows)), unique_by: unique_by)
+      end
+
+      parsed.pr_links.map { |link| link.slice(:pr_repository, :pr_number) }
+    end
+
+    # `upsert_all` rejects a batch whose rows do not all carry the same keys,
+    # and an adapter legitimately omits keys that do not apply to a row (a text
+    # content block has no tool name). Missing keys become explicit nils.
+    def square_off(rows)
+      template = rows.flat_map(&:keys).uniq.index_with(nil)
+      rows.map { |row| template.merge(row) }
+    end
+
+    # Postgres accepts no NUL character in either `text` or `jsonb`, and a
+    # transcript picks one up whenever a tool touched binary content. Dropping
+    # it costs nothing queryable and keeps one bad byte from failing the whole
+    # file.
+    def scrub(rows)
+      rows.map { |row| row.transform_values { |value| scrub_value(value) } }
+    end
+
+    def scrub_value(value)
+      case value
+      when String then value.include?(NUL) ? value.delete(NUL) : value
+      when Hash then value.to_h { |key, nested| [ scrub_value(key), scrub_value(nested) ] }
+      when Array then value.map { |nested| scrub_value(nested) }
+      else value
+      end
+    end
+
+    def dedupe(rows, table)
+      key = DEDUPE_KEYS.fetch(table, DEFAULT_DEDUPE_KEY)
+      seen = {}
+      rows.each { |row| seen[key.call(row)] = row }
+      seen.values
+    end
+
+    def enqueue_enrichment(session, newly_created, new_pr_link_keys)
+      ResolveRepoJob.perform_later(session.session_id) if newly_created && session.repo_id.nil?
+      return if new_pr_link_keys.empty?
+
+      ids = PrLink.where(
+        session_id: session.session_id,
+        pr_repository: new_pr_link_keys.map { |k| k[:pr_repository] }.uniq,
+        pr_number: new_pr_link_keys.map { |k| k[:pr_number] }.uniq
+      ).where(pr_title: nil).pluck(:id)
+      ids.each { |id| EnrichPrLinkJob.perform_later(id) }
+    end
+
+    def earliest_message_timestamp(session_id)
+      Message.where(session_id: session_id).minimum(:timestamp)
     end
 
     def record_run(result, started)
@@ -52,7 +211,7 @@ module Sessions
 
       duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round
       IngestionRun.create!(
-        file_path: @file_path,
+        file_path: file_path,
         status: result.status.to_s,
         error_class: result.error&.class&.name,
         error_message: result.error&.message,
@@ -62,279 +221,6 @@ module Sessions
       )
     rescue => e
       Rails.logger.warn("[ingester] failed to record run: #{e.message}")
-    end
-
-    def up_to_date?(session, stat)
-      session.persisted? &&
-        session.file_mtime.present? &&
-        session.file_size == stat.size &&
-        session.file_mtime.to_i == stat.mtime.to_i
-    end
-
-    def parse_and_persist(session, offset, stat)
-      records = read_records(offset)
-      return 0 if records.empty? && session.persisted?
-
-      newly_created = session.new_record?
-      new_pr_link_keys = []
-
-      ActiveRecord::Base.transaction do
-        session.save! if newly_created
-
-        apply_session_records(session, records)
-        new_pr_link_keys = bulk_insert_messages(session, records)
-        recompute_session_aggregates(session)
-
-        session.update!(
-          file_mtime: stat.mtime,
-          file_size: stat.size,
-          last_byte_offset: stat.size,
-          last_ingested_at: Time.current,
-          created_at: earliest_message_timestamp(session) || session.created_at || Time.current
-        )
-      end
-
-      enqueue_enrichment(session, newly_created, new_pr_link_keys)
-
-      records.size
-    end
-
-    def enqueue_enrichment(session, newly_created, new_pr_link_keys)
-      ResolveRepoJob.perform_later(session.session_id) if newly_created && session.repo_id.nil?
-
-      return if new_pr_link_keys.empty?
-      ids = PrLink.where(
-        session_id: session.session_id,
-        pr_repository: new_pr_link_keys.map { |k| k[:pr_repository] }.uniq,
-        pr_number: new_pr_link_keys.map { |k| k[:pr_number] }.uniq
-      ).where(pr_title: nil).pluck(:id)
-      ids.each { |id| EnrichPrLinkJob.perform_later(id) }
-    end
-
-    def read_records(offset)
-      records = []
-      File.open(@file_path, "rb") do |f|
-        f.seek(offset)
-        f.each_line do |line|
-          line.chomp!
-          next if line.empty?
-          begin
-            records << JSON.parse(line)
-          rescue JSON::ParserError => e
-            Rails.logger.warn("Skipping malformed line in #{@file_path}: #{e.message}")
-          end
-        end
-      end
-      records
-    end
-
-    def apply_session_records(session, records)
-      changes = {}
-      records.each do |r|
-        case r["type"]
-        when "permission-mode" then changes[:permission_mode] = r["permissionMode"]
-        when "custom-title"    then changes[:custom_title]    = r["customTitle"]
-        when "agent-name"      then changes[:agent_name]      = r["agentName"]
-        when "last-prompt"     then changes[:last_prompt]     = r["lastPrompt"]
-        when "worktree-state"  then changes[:worktree_config] = r["worktreeSession"] || {}
-        end
-      end
-      session.assign_attributes(changes) if changes.any?
-      session.save! if session.changed?
-    end
-
-    def bulk_insert_messages(session, records)
-      messages = []
-      user_prompts = []
-      tool_results = []
-      assistant_msgs = []
-      content_blocks = []
-      system_events = []
-      attachments = []
-      pr_links = []
-      file_history = []
-
-      records.each do |r|
-        case r["type"]
-        when "user"       then build_user_record(r, session, messages, user_prompts, tool_results)
-        when "assistant"  then build_assistant_record(r, session, messages, assistant_msgs, content_blocks)
-        when "system"     then build_system_record(r, session, messages, system_events)
-        when "attachment" then build_attachment_record(r, session, messages, attachments)
-        when "pr-link"    then pr_links << build_pr_link(r, session)
-        when "file-history-snapshot" then file_history << build_file_history(r, session)
-        end
-      end
-
-      messages       = dedupe_last(messages)       { |r| r[:uuid] }
-      user_prompts   = dedupe_last(user_prompts)   { |r| r[:message_uuid] }
-      tool_results   = dedupe_last(tool_results)   { |r| r[:message_uuid] }
-      assistant_msgs = dedupe_last(assistant_msgs) { |r| r[:message_uuid] }
-      content_blocks = dedupe_last(content_blocks) { |r| [ r[:assistant_message_uuid], r[:position] ] }
-      system_events  = dedupe_last(system_events)  { |r| r[:message_uuid] }
-      attachments    = dedupe_last(attachments)    { |r| r[:message_uuid] }
-      pr_links       = dedupe_last(pr_links)       { |r| [ r[:session_id], r[:pr_repository], r[:pr_number] ] }
-      file_history   = dedupe_last(file_history)   { |r| [ r[:session_id], r[:source_message_id] ] }
-
-      Message.upsert_all(messages, unique_by: :uuid) if messages.any?
-      UserPrompt.upsert_all(user_prompts, unique_by: :message_uuid) if user_prompts.any?
-      ToolResult.upsert_all(tool_results, unique_by: :message_uuid) if tool_results.any?
-      AssistantMessage.upsert_all(assistant_msgs, unique_by: :message_uuid) if assistant_msgs.any?
-      ContentBlock.upsert_all(content_blocks, unique_by: "uniq_content_blocks_on_assistant_position") if content_blocks.any?
-      SystemEvent.upsert_all(system_events, unique_by: :message_uuid) if system_events.any?
-      Attachment.upsert_all(attachments, unique_by: :message_uuid) if attachments.any?
-      PrLink.upsert_all(pr_links, unique_by: "uniq_pr_links_on_session_repo_number") if pr_links.any?
-      FileHistorySnapshot.upsert_all(file_history, unique_by: "uniq_file_history_on_session_source") if file_history.any?
-
-      pr_links.map { |pl| { pr_repository: pl[:pr_repository], pr_number: pl[:pr_number] } }
-    end
-
-    def dedupe_last(rows)
-      seen = {}
-      rows.each { |r| seen[yield(r)] = r }
-      seen.values
-    end
-
-    def build_user_record(r, session, messages, user_prompts, tool_results)
-      uuid = r["uuid"]
-      return unless uuid
-
-      content = r.dig("message", "content")
-      if content.is_a?(String)
-        messages << message_attrs(r, session, "user_prompt")
-        user_prompts << {
-          message_uuid: uuid,
-          content_text: content,
-          prompt_id: r["promptId"],
-          permission_mode: r["permissionMode"],
-          is_meta: r["isMeta"] || false
-        }
-      elsif content.is_a?(Array)
-        messages << message_attrs(r, session, "tool_result")
-        first = content.first || {}
-        result_content = if first["content"].is_a?(String)
-          { text: first["content"] }
-        else
-          first["content"] || {}
-        end
-        tool_results << {
-          message_uuid: uuid,
-          tool_use_id: first["tool_use_id"],
-          source_assistant_uuid: r["sourceToolAssistantUUID"],
-          result_type: first["type"],
-          result_content: result_content
-        }
-      end
-    end
-
-    def build_assistant_record(r, session, messages, assistant_msgs, content_blocks)
-      uuid = r["uuid"]
-      return unless uuid
-
-      msg = r["message"] || {}
-      usage = msg["usage"] || {}
-      messages << message_attrs(r, session, "assistant")
-      assistant_msgs << {
-        message_uuid: uuid,
-        model: msg["model"],
-        api_message_id: msg["id"],
-        request_id: r["requestId"],
-        stop_reason: msg["stop_reason"],
-        input_tokens: usage["input_tokens"] || 0,
-        output_tokens: usage["output_tokens"] || 0,
-        cache_creation_input_tokens: usage["cache_creation_input_tokens"] || 0,
-        cache_read_input_tokens: usage["cache_read_input_tokens"] || 0,
-        usage_details: usage.except("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"),
-        cost_usd: Pricing.cost_for_usage(msg["model"], usage)
-      }
-
-      (msg["content"] || []).each_with_index do |block, position|
-        next unless %w[thinking text tool_use].include?(block["type"])
-        content_blocks << {
-          assistant_message_uuid: uuid,
-          position: position,
-          block_type: block["type"],
-          text_content: block["text"] || block["thinking"],
-          tool_use_id: block["id"],
-          tool_name: block["name"],
-          tool_input: block["input"] || {},
-          thinking_signature: block["signature"]
-        }
-      end
-    end
-
-    def build_system_record(r, session, messages, system_events)
-      uuid = r["uuid"]
-      return unless uuid
-
-      messages << message_attrs(r, session, "system")
-      system_events << {
-        message_uuid: uuid,
-        subtype: r["subtype"] || "unknown",
-        duration_ms: r["durationMs"],
-        message_count: r["messageCount"],
-        hook_count: r["hookCount"],
-        hook_infos: r["hookInfos"] || [],
-        hook_errors: r["hookErrors"] || [],
-        prevented_continuation: r["preventedContinuation"] || false,
-        stop_reason: r["stopReason"],
-        has_output: r["hasOutput"] || false,
-        level: r["level"],
-        is_meta: r["isMeta"] || false
-      }
-    end
-
-    def build_attachment_record(r, session, messages, attachments)
-      uuid = r["uuid"]
-      return unless uuid
-
-      messages << message_attrs(r, session, "attachment")
-      attachments << {
-        message_uuid: uuid,
-        attachment_type: r.dig("attachment", "type"),
-        attachment_data: r["attachment"] || {}
-      }
-    end
-
-    def build_pr_link(r, session)
-      {
-        session_id: session.session_id,
-        pr_number: r["prNumber"],
-        pr_url: r["prUrl"],
-        pr_repository: r["prRepository"],
-        linked_at: r["timestamp"]
-      }
-    end
-
-    def build_file_history(r, session)
-      snapshot = r["snapshot"] || {}
-      {
-        session_id: session.session_id,
-        source_message_id: r["messageId"],
-        is_snapshot_update: r["isSnapshotUpdate"] || false,
-        tracked_files: snapshot["trackedFileBackups"] || {},
-        snapshot_timestamp: snapshot["timestamp"]
-      }
-    end
-
-    def message_attrs(r, session, type)
-      {
-        uuid: r["uuid"],
-        session_id: session.session_id,
-        parent_uuid: r["parentUuid"],
-        message_type: type,
-        is_sidechain: r["isSidechain"] || false,
-        timestamp: r["timestamp"],
-        cwd: r["cwd"],
-        git_branch: r["gitBranch"],
-        version: r["version"],
-        entrypoint: r["entrypoint"],
-        slug: r["slug"],
-        user_type: r["userType"]
-      }
-    end
-
-    def earliest_message_timestamp(session)
-      Message.where(session_id: session.session_id).minimum(:timestamp)
     end
 
     RECOMPUTE_AGGREGATES_SQL = <<~SQL.freeze
@@ -361,7 +247,7 @@ module Sessions
              ORDER BY timestamp ASC LIMIT 1) AS branch,
           (SELECT up.content_text FROM user_prompts up
              JOIN messages m ON m.uuid = up.message_uuid
-             WHERE m.session_id = :session_id
+             WHERE m.session_id = :session_id AND up.is_meta = false
              ORDER BY m.timestamp ASC LIMIT 1) AS first_prompt,
           (SELECT MAX(timestamp) FROM messages WHERE session_id = :session_id) AS ended_at,
           COALESCE((SELECT SUM(am.input_tokens + am.cache_creation_input_tokens + am.cache_read_input_tokens)
@@ -400,14 +286,20 @@ module Sessions
              WHERE m.session_id = :session_id
                AND se.subtype = 'turn_duration'), 0) AS active_duration_ms,
           (SELECT COUNT(*) FROM pr_links WHERE session_id = :session_id) AS pr_link_count,
-          (SELECT COUNT(DISTINCT cb.tool_input ->> 'file_path')
+          (SELECT COUNT(DISTINCT COALESCE(
+                    cb.tool_input ->> 'file_path',
+                    cb.tool_input ->> 'path',
+                    cb.tool_input ->> 'file'))
              FROM content_blocks cb
              JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
              JOIN messages m ON m.uuid = am.message_uuid
              WHERE m.session_id = :session_id
                AND cb.block_type = 'tool_use'
-               AND cb.tool_name IN ('Edit', 'Write', 'NotebookEdit')
-               AND cb.tool_input ->> 'file_path' IS NOT NULL) AS files_edited_count,
+               AND cb.tool_kind = 'edit'
+               AND COALESCE(
+                     cb.tool_input ->> 'file_path',
+                     cb.tool_input ->> 'path',
+                     cb.tool_input ->> 'file') IS NOT NULL) AS files_edited_count,
           (SELECT COUNT(*)
              FROM content_blocks cb
              JOIN assistant_messages am ON am.message_uuid = cb.assistant_message_uuid
@@ -430,10 +322,6 @@ module Sessions
         [ RECOMPUTE_AGGREGATES_SQL, { session_id: session_id } ]
       )
       Session.connection.exec_update(sql, "RecomputeSessionAggregates")
-    end
-
-    def recompute_session_aggregates(session)
-      self.class.recompute_aggregates(session.session_id)
     end
   end
 end
