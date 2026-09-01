@@ -12,9 +12,16 @@ One row per agent session, whichever agent produced it.
 
 Identity and naming:
 `session_id`, `source`, `source_metadata`, `title`, `custom_title`,
-`first_prompt`, `last_prompt`, `agent_name`, `permission_mode`, `project_path`,
-`directory`, `worktree`, `branch`, `worktree_config`, `repo_id`, `created_at`,
-`ended_at`, `updated_at`
+`title_prompt`, `first_prompt`, `last_prompt`, `agent_name`, `permission_mode`,
+`project_path`, `directory`, `worktree`, `branch`, `worktree_config`,
+`repo_id`, `created_at`, `ended_at`, `updated_at`
+
+`title` is generated from `custom_title`, then `title_prompt`, then the last
+prompt, then a short id. `title_prompt` is the session's most title-worthy
+prompt, cleaned for display — usually but not always the first one, since a
+session opened with `/clear` has its subject further in. `first_prompt` stays
+literal: the first non-meta prompt, verbatim. See [how a session gets its
+name](sessions.md#how-a-session-gets-its-name) for the functions involved.
 
 `source` is `claude_code` or `codex` — filter on it to compare agents, or
 group by it to see the split. `directory` is the absolute working directory

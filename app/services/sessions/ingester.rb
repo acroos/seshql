@@ -227,6 +227,7 @@ module Sessions
       UPDATE sessions SET
         branch                      = sub.branch,
         first_prompt                = sub.first_prompt,
+        title_prompt                = sub.title_prompt,
         ended_at                    = sub.ended_at,
         total_input_tokens          = sub.total_input_tokens,
         total_output_tokens         = sub.total_output_tokens,
@@ -249,6 +250,18 @@ module Sessions
              JOIN messages m ON m.uuid = up.message_uuid
              WHERE m.session_id = :session_id AND up.is_meta = false
              ORDER BY m.timestamp ASC LIMIT 1) AS first_prompt,
+          -- The prompt worth naming the session after, which is often not the
+          -- first one: a session opened with `/clear` or `/model` has its real
+          -- subject further in. `prompt_title_rank` orders by how title-worthy
+          -- a prompt is, and time only breaks ties within a rank.
+          (SELECT prompt_title(up.content_text) FROM user_prompts up
+             JOIN messages m ON m.uuid = up.message_uuid
+             WHERE m.session_id = :session_id
+               AND up.is_meta = false
+               AND m.is_sidechain = false
+               AND prompt_title(up.content_text) IS NOT NULL
+             ORDER BY prompt_title_rank(up.content_text), m.timestamp
+             LIMIT 1) AS title_prompt,
           (SELECT MAX(timestamp) FROM messages WHERE session_id = :session_id) AS ended_at,
           COALESCE((SELECT SUM(am.input_tokens + am.cache_creation_input_tokens + am.cache_read_input_tokens)
              FROM assistant_messages am

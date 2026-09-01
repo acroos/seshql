@@ -83,10 +83,12 @@ Both leave the transcripts on disk untouched.
 
 ## Schema loading and SQL functions
 
-`content_blocks.bash_command` and `bash_programs` are generated columns whose
-expressions call the `shell_command()` and `bash_programs()` SQL functions.
-Those functions are managed by the [`fx`](https://github.com/teoljungberg/fx)
-gem, live in `db/functions/`, and are dumped into `db/schema.rb`.
+`content_blocks.bash_command` and `bash_programs`, and `sessions.title`, are
+generated columns whose expressions call SQL functions: `shell_command()` and
+`bash_programs()` for the first two, `prompt_title()` and `title_snippet()` for
+the third. Those functions are managed by the
+[`fx`](https://github.com/teoljungberg/fx) gem, live in `db/functions/`, and
+are dumped into `db/schema.rb`.
 
 `config/initializers/fx_schema_dumper_ordering.rb` moves them ahead of the
 tables in the dump. Without that, `db:prepare` and `db:test:prepare` fail on a
@@ -94,3 +96,10 @@ fresh database with `function bash_programs(text) does not exist`, because
 Postgres resolves a generated column's expression at the moment the column is
 created. If you ever see that error, check that the initializer is still in
 place and re-run `bin/rails db:schema:dump`.
+
+Changing one of these functions is not enough on its own: a `STORED` generated
+column is not revisited when the function under it changes, and Postgres will
+refuse to replace a function a column depends on. Drop the column,
+`update_function`, then re-add the column — which recomputes every row from
+data already on disk, with no re-ingest. `FixBashProgramsSeparator` and
+`ImproveSessionTitles` both do this.

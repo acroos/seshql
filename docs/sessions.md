@@ -7,9 +7,9 @@ whether Claude Code or Codex produced them.
 
 The index lists every ingested session, newest first, with:
 
-- **Title** — `custom_title` if the agent set one, otherwise the opening of
-  the session's first real user prompt (injected developer and system messages
-  are skipped).
+- **Title** — `custom_title` if the agent set one, otherwise the best prompt
+  in the session, cleaned up. See [How a session gets its
+  name](#how-a-session-gets-its-name) below.
 - **Project** — the directory the session was started in, plus which agent ran
   it, the git branch, worktree, and agent name when present.
 - **Cost** — estimated USD at the relevant provider's list prices (Anthropic
@@ -27,8 +27,8 @@ single query regardless of session size.
 
 ### Filters
 
-- **Search box** — substring match against the title, last prompt, and
-  session id.
+- **Search box** — substring match against the title (so a custom title and a
+  derived one are both searchable), the last prompt, and the session id.
 - **Project filter** — narrow to a single working directory. Both agents record
   a real absolute path, so a directory's pill covers sessions from either.
 - **Agent filter** — add `?source=claude_code` or `?source=codex` to the URL to
@@ -36,6 +36,47 @@ single query regardless of session size.
 
 The index is paginated; URL params survive paging so you can share a
 filtered link.
+
+## How a session gets its name
+
+Sessions have no name of their own, so one is derived. `sessions.title` is a
+generated column that takes the first of:
+
+1. `custom_title`, when the agent set one.
+2. `title_prompt` — the session's most title-worthy prompt, cleaned up.
+3. The last prompt, cleaned up the same way.
+4. `Session <first 8 of the id>`, for a session with nothing said in it.
+
+Steps 2 and 3 are the interesting ones, because the obvious rule — "use the
+first prompt" — produces bad names often. Claude Code stores several things in
+the same slot as a typed prompt: slash-command invocations, `!` shell
+commands, the output of both, and hook output. A session opened with `/clear`
+used to be called `<command-name>/clear</command-name> <command-message>clear`,
+truncated mid-tag.
+
+Three Postgres functions handle it, all of them callable from the SQL Console:
+
+- **`prompt_title(prompt)`** turns one prompt into displayable text, or `NULL`
+  when it was the harness talking rather than you. `/clear` becomes `/clear`;
+  `/fix <request>` becomes `/fix — <request>`; `!git status` becomes
+  `$ git status`; command stdout, hook output, and system reminders become
+  `NULL`. Prose is passed through with its newlines collapsed.
+- **`prompt_title_rank(prompt)`** scores that output, lowest first: a stated
+  request (prose, or a slash command carrying one) beats a bare acknowledgement
+  like `ok`, which beats a shell command, which beats a bare `/clear` or
+  `/model`. Harness output scores 99 and is excluded.
+- **`title_snippet(body, max_length)`** truncates on a word boundary.
+
+`Sessions::Ingester` orders a session's non-meta, non-sidechain prompts by rank
+and then by time, and caches the winner as `title_prompt`. Ranking before time
+is what fixes the common case: the `/clear` that opened the session loses to
+the first real request behind it, however far in that was. Ordering by time
+within a rank is what keeps the name about how the session *started* rather
+than how it ended.
+
+The heuristic is deliberately conservative — it never invents words, so a
+session's name is always something that was actually said in it. A session
+whose only content is `/login` really is called `/login`.
 
 ## Session detail
 

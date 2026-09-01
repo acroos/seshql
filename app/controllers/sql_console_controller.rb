@@ -9,7 +9,7 @@ class SqlConsoleController < ApplicationController
   ].freeze
 
   SCHEMA_REFERENCE = {
-    "sessions" => %w[session_id source source_metadata permission_mode custom_title agent_name title first_prompt last_prompt project_path directory worktree branch worktree_config repo_id tools_used total_input_tokens total_output_tokens total_cache_creation_tokens total_cache_read_tokens total_cost_usd user_message_count assistant_message_count active_duration_ms pr_link_count files_edited_count git_commit_count created_at ended_at updated_at],
+    "sessions" => %w[session_id source source_metadata permission_mode custom_title agent_name title title_prompt first_prompt last_prompt project_path directory worktree branch worktree_config repo_id tools_used total_input_tokens total_output_tokens total_cache_creation_tokens total_cache_read_tokens total_cost_usd user_message_count assistant_message_count active_duration_ms pr_link_count files_edited_count git_commit_count created_at ended_at updated_at],
     "messages" => %w[uuid session_id parent_uuid message_type is_sidechain timestamp cwd git_branch version entrypoint slug user_type],
     "user_prompts" => %w[message_uuid content_text prompt_id permission_mode is_meta],
     "assistant_messages" => %w[message_uuid model api_message_id request_id stop_reason input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens cost_usd usage_details],
