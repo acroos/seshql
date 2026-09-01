@@ -21,10 +21,6 @@ development:
     <<: *default
     database: seshql_development_queue
     migrations_paths: db/queue_migrate
-  cable:
-    <<: *default
-    database: seshql_development_cable
-    migrations_paths: db/cable_migrate
 
 test:
   <<: *default
@@ -42,7 +38,3 @@ production:
     <<: *default
     database: seshql_production_queue
     migrations_paths: db/queue_migrate
-  cable:
-    <<: *default
-    database: seshql_production_cable
-    migrations_paths: db/cable_migrate
